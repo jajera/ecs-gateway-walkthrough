@@ -1,0 +1,268 @@
+---
+title: Fargate gateway
+description: Create a Fargate-path ECS cluster and an internet-facing gateway on the shared public subnets.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+Path-owned resources for `${NAME}-fargate`. Confirm shared vars from [Setup](/setup/prerequisites/) are still in this shell (`$NAME`, `$PUBLIC_SUBNET_A` / `$PUBLIC_SUBNET_B`, `$GATEWAY_INFRA_ROLE_ARN`).
+
+<div class="ecsx-stages not-content" aria-label="This page has three stages: create the cluster, create the gateway, then associate the gateway with the cluster.">
+  <div class="ecsx-stage">
+    <span class="ecsx-stage__n">1</span>
+    <img src={icon("icons/service/containers/Arch_Amazon-Elastic-Container-Service_64.svg")} alt="" aria-hidden="true" width="30" height="30" loading="lazy" />
+    <span class="ecsx-stage__title">Cluster</span>
+    <span class="ecsx-stage__sub">path-owned, independent</span>
+  </div>
+  <span class="ecsx-stage__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-stage">
+    <span class="ecsx-stage__n">2</span>
+    <img src={icon("icons/resource/networking/Res_Elastic-Load-Balancing_Application-Load-Balancer_48.svg")} alt="" aria-hidden="true" width="30" height="30" loading="lazy" />
+    <span class="ecsx-stage__title">Gateway</span>
+    <span class="ecsx-stage__sub">host-shared ALB · public subnets</span>
+  </div>
+  <span class="ecsx-stage__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-stage">
+    <span class="ecsx-stage__n">3</span>
+    <span class="ecsx-stage__link" aria-hidden="true">
+      🔗
+    </span>
+    <span class="ecsx-stage__title">Associate</span>
+    <span class="ecsx-stage__sub">gateway ↔ cluster</span>
+  </div>
+</div>
+
+<Aside type="note">Each step shows one command with sample output directly below it. Sample outputs use the lab name `ecs-gw-lab-fargate`; ARNs and account IDs are redacted or omitted.</Aside>
+
+## Path variables
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+export PATH_NAME="${NAME}-fargate"
+export CLUSTER="$PATH_NAME"
+export GATEWAY="$PATH_NAME"
+echo "path ready: CLUSTER=$CLUSTER GATEWAY=$GATEWAY"
+```
+
+```text
+path ready: CLUSTER=ecs-gw-lab-fargate GATEWAY=ecs-gw-lab-fargate
+```
+
+</div>
+
+## Cluster
+
+This cluster is independent of any EC2-path cluster.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs create-cluster --cluster-name "$CLUSTER" \
+  --query 'cluster.{name:clusterName,status:status}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-fargate",
+    "status": "ACTIVE"
+}
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs describe-clusters --clusters "$CLUSTER" \
+  --query 'clusters[0].{name:clusterName,status:status}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-fargate",
+    "status": "ACTIVE"
+}
+```
+
+</div>
+
+## Gateway
+
+Creates an account-level gateway with a **host-shared ALB** configuration. Subnets must be the **public** pair (internet-facing scheme). No ALB exists yet — ECS creates it when the first compatible service connects.
+
+Raw `create-gateway` / `associate` responses include ARNs (account ID). Redirect them and confirm with a trimmed query.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs create-gateway \
+  --name "$GATEWAY" \
+  --infrastructure-role-arn "$GATEWAY_INFRA_ROLE_ARN" \
+  --configuration "{
+    \"hostSharedAlb\": {
+      \"scheme\": \"internet-facing\",
+      \"networkConfiguration\": {
+        \"subnets\": [\"${PUBLIC_SUBNET_A}\", \"${PUBLIC_SUBNET_B}\"],
+        \"ipAddressType\": \"ipv4\"
+      }
+    }
+  }" >/dev/null
+```
+
+```text
+(no stdout — success is silent)
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs describe-gateway --gateway "$GATEWAY" \
+  --query 'gateway.{name:name,status:status,accessType:accessType}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-fargate",
+    "status": "ACTIVE",
+    "accessType": "PUBLIC"
+}
+```
+
+</div>
+
+Status should be `ACTIVE`. This gateway is independent of any EC2-path gateway.
+
+<Aside type="caution">
+  Name, scheme, subnets, and IP address type are immutable after create. Deletion protection defaults **on**; [teardown](/fargate/teardown/) turns it off before `delete-gateway`.
+</Aside>
+
+<Aside type="note">If create fails with an assume-role / `PassRole` error, wait about a minute for IAM and retry (see [Infra roles](/setup/infra-roles/)).</Aside>
+
+## Associate
+
+A service can use a gateway only after the gateway is associated with that service’s cluster.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs associate-gateway-with-cluster \
+  --gateway "$GATEWAY" \
+  --cluster "$CLUSTER" >/dev/null
+```
+
+```text
+(no stdout — success is silent)
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs list-gateway-cluster-associations --gateway "$GATEWAY" \
+  --query 'gatewayClusterAssociations[].status'
+```
+
+```text
+[
+    "ACTIVE"
+]
+```
+
+</div>
+
+Expect `[ "ACTIVE" ]`. Full association payloads include ARNs — do not paste them into tickets.
+
+The cluster and gateway are ready, but **no ALB exists yet** — it is provisioned when the first service connects. Next you deploy the two demo services, **Orders** (`-a`) and **Catalog** (`-b`), each with a gateway connector.
+
+## Next
+
+[Fargate services](/fargate/services/)
+
+<style>{`
+  .ecsx-stages {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0.5rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-stage {
+    position: relative;
+    flex: 1 1 10rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 1.1rem 0.9rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+  }
+
+  .ecsx-stage__n {
+    position: absolute;
+    top: -0.7rem;
+    left: 0.9rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--sl-color-accent);
+    color: var(--sl-color-black);
+    font-size: var(--sl-text-xs);
+    font-weight: 800;
+  }
+
+  .ecsx-stage__link {
+    font-size: 1.7rem;
+    line-height: 1;
+  }
+
+  .ecsx-stage__title {
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-stage__sub {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-stage__arrow {
+    align-self: center;
+    font-size: 1.5rem;
+    color: var(--sl-color-accent);
+    flex: 0 0 auto;
+  }
+
+  .ecsx-cli {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-block: 1rem;
+  }
+
+  .ecsx-cli > * {
+    margin-block: 0 !important;
+  }
+
+  @media (max-width: 36rem) {
+    .ecsx-stage__arrow {
+      transform: rotate(90deg);
+    }
+  }
+`}</style>

@@ -1,0 +1,187 @@
+---
+title: Pricing
+description: ECS Gateway has no extra charge — you pay for ALBs, certificates, logs, metrics, and data transfer.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+<div class="ecsx-hero not-content">
+  <span class="ecsx-hero__big">$0</span>
+  <span class="ecsx-hero__label">ECS Gateway itself adds no charge</span>
+</div>
+
+You pay only for the underlying resources ECS provisions when services connect:
+
+<div class="ecsx-costs not-content">
+  <div class="ecsx-cost">
+    <span class="ecsx-cost__icon" aria-hidden="true">
+      ⚖️
+    </span>
+    <strong>Application Load Balancer</strong>
+    <span>ALB hours + LCU usage</span>
+  </div>
+  <div class="ecsx-cost">
+    <span class="ecsx-cost__icon" aria-hidden="true">
+      🔒
+    </span>
+    <strong>ACM certificates</strong>
+    <span>public certs for managed hostnames — standard ACM public-cert pricing</span>
+  </div>
+  <div class="ecsx-cost">
+    <span class="ecsx-cost__icon" aria-hidden="true">
+      📊
+    </span>
+    <strong>CloudWatch</strong>
+    <span>metrics + optional access logs</span>
+  </div>
+  <div class="ecsx-cost">
+    <span class="ecsx-cost__icon" aria-hidden="true">
+      🔄
+    </span>
+    <strong>Data transfer</strong>
+    <span>standard egress rates</span>
+  </div>
+</div>
+
+## The cost lever
+
+<div class="ecsx-lever not-content">
+  <div class="ecsx-lever__col ecsx-lever__col--before">
+    <span class="ecsx-lever__head">One ALB per service</span>
+    <span class="ecsx-lever__big">25×</span>
+    <span class="ecsx-lever__note">25 services → 25 ALBs to pay for and run</span>
+  </div>
+  <span class="ecsx-lever__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-lever__col ecsx-lever__col--after">
+    <span class="ecsx-lever__head">One shared ALB</span>
+    <span class="ecsx-lever__big">1×</span>
+    <span class="ecsx-lever__note">up to 25 services share a single ALB</span>
+  </div>
+</div>
+
+Sharing one ALB across many services (up to 25 per ALB) is the main cost lever versus one ALB per
+service.
+
+<Aside type="note">ACM public certificate pricing and ELB rates change over time — always check the current pages below before estimating.</Aside>
+
+See [Amazon ECS pricing](https://aws.amazon.com/ecs/pricing/) and [Elastic Load Balancing pricing](https://aws.amazon.com/elasticloadbalancing/pricing/).
+
+<style>{`
+  .ecsx-hero {
+    display: flex;
+    align-items: baseline;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    margin-block: 1.5rem;
+    padding: 1.25rem 1.4rem;
+    border: 1px solid var(--sl-color-accent);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--sl-color-accent) 10%, var(--sl-color-black));
+  }
+
+  .ecsx-hero__big {
+    font-size: 3rem;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--sl-color-accent);
+  }
+
+  .ecsx-hero__label {
+    font-size: var(--sl-text-lg);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-costs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    gap: 0.6rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-cost {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.55rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-cost__icon {
+    font-size: 1.5rem;
+  }
+
+  .ecsx-cost strong {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-cost span:last-child {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-lever {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0.75rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-lever__col {
+    flex: 1 1 13rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+  }
+
+  .ecsx-lever__col--after {
+    border-color: var(--sl-color-accent);
+    background: color-mix(in srgb, var(--sl-color-accent) 8%, var(--sl-color-gray-6));
+  }
+
+  .ecsx-lever__head {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-lever__big {
+    font-size: 2.2rem;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--sl-color-accent);
+  }
+
+  .ecsx-lever__col--before .ecsx-lever__big {
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-lever__note {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-lever__arrow {
+    align-self: center;
+    font-size: 1.75rem;
+    color: var(--sl-color-accent);
+  }
+
+  @media (max-width: 36rem) {
+    .ecsx-lever__arrow {
+      transform: rotate(90deg);
+    }
+  }
+`}</style>

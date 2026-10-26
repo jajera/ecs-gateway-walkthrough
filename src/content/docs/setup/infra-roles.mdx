@@ -1,0 +1,182 @@
+---
+title: Infra roles
+description: Create the ECS Gateway infrastructure IAM role and a task execution role shared by both paths.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+These roles are shared by the EC2 and Fargate paths. Confirm `$NAME` is set from [Prerequisites](/setup/prerequisites/). The EC2 **instance** role is created later under [EC2 capacity](/ec2/capacity/).
+
+Two roles, two different trust principals — the thing to get right is which AWS service is allowed
+to assume each.
+
+<div class="ecsx-roles not-content">
+  <div class="ecsx-role">
+    <div class="ecsx-role__head">
+      <img src={icon("icons/resource/security/Res_AWS-Identity-Access-Management_Role_48.svg")} alt="" aria-hidden="true" width="34" height="34" loading="lazy" />
+      <span>
+        <code>ecs-gw-lab-gateway-infra</code>
+      </span>
+    </div>
+    <dl class="ecsx-role__meta">
+      <dt>Trusted by</dt>
+      <dd>
+        <code>ecs.amazonaws.com</code>
+      </dd>
+      <dt>Policy</dt>
+      <dd>
+        <code>AmazonECSInfrastructureRoleForGatewayHostSharedALB</code>
+      </dd>
+      <dt>Lets ECS</dt>
+      <dd>Create the ALB, security groups, and ACM certificates for the gateway</dd>
+    </dl>
+  </div>
+  <div class="ecsx-role">
+    <div class="ecsx-role__head">
+      <img src={icon("icons/resource/security/Res_AWS-Identity-Access-Management_Role_48.svg")} alt="" aria-hidden="true" width="34" height="34" loading="lazy" />
+      <span>
+        <code>ecs-gw-lab-exec</code>
+      </span>
+    </div>
+    <dl class="ecsx-role__meta">
+      <dt>Trusted by</dt>
+      <dd>
+        <code>ecs-tasks.amazonaws.com</code>
+      </dd>
+      <dt>Policy</dt>
+      <dd>
+        <code>AmazonECSTaskExecutionRolePolicy</code>
+      </dd>
+      <dt>Lets tasks</dt>
+      <dd>
+        Pull container images and write logs (Fargate and EC2 <Tooltip term="awsvpc" label="awsvpc" /> tasks)
+      </dd>
+    </dl>
+  </div>
+</div>
+
+## Gateway infrastructure role
+
+ECS assumes this <Tooltip term="infrastructure-role" label="infrastructure role" /> to create ALBs, security groups, ACM certificates, and related resources in your account. Attach the AWS managed policy `AmazonECSInfrastructureRoleForGatewayHostSharedALB`.
+
+Your caller also needs `iam:PassRole` on this role when running `create-gateway` (AdministratorAccess includes it).
+
+```bash
+aws iam create-role \
+  --role-name "${NAME}-gateway-infra" \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": { "Service": "ecs.amazonaws.com" },
+      "Action": "sts:AssumeRole"
+    }]
+  }' \
+  --query 'Role.RoleName' --output text
+
+aws iam attach-role-policy \
+  --role-name "${NAME}-gateway-infra" \
+  --policy-arn arn:aws:iam::aws:policy/AmazonECSInfrastructureRoleForGatewayHostSharedALB
+
+GATEWAY_INFRA_ROLE_ARN=$(aws iam get-role \
+  --role-name "${NAME}-gateway-infra" \
+  --query Role.Arn --output text)
+export GATEWAY_INFRA_ROLE_ARN
+echo "gateway infra role ready: ${NAME}-gateway-infra"
+```
+
+Do not paste role ARNs into docs or tickets — they embed the account ID. Keep `$GATEWAY_INFRA_ROLE_ARN` in your shell for later pages.
+
+<Aside type="note">IAM is eventually consistent. If `create-gateway` fails with an assume-role error, wait about a minute and retry.</Aside>
+
+## Task execution role
+
+Both Fargate and EC2 `awsvpc` tasks use this role to pull images and write logs (`CreateLogStream` / `PutLogEvents`). It does **not** include `logs:CreateLogGroup` — each path’s services page creates the log group with your caller identity. Your caller also needs `iam:PassRole` on this role when registering task definitions / creating services.
+
+```bash
+aws iam create-role \
+  --role-name "${NAME}-exec" \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+      "Action": "sts:AssumeRole"
+    }]
+  }' \
+  --query 'Role.RoleName' --output text
+
+aws iam attach-role-policy \
+  --role-name "${NAME}-exec" \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+EXEC_ROLE_ARN=$(aws iam get-role \
+  --role-name "${NAME}-exec" \
+  --query Role.Arn --output text)
+export EXEC_ROLE_ARN
+echo "task execution role ready: ${NAME}-exec"
+```
+
+## Next
+
+[Choose a path](/setup/choose-path/)
+
+<style>{`
+  .ecsx-roles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: 0.75rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-role {
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-top: 3px solid var(--sl-color-accent);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-role__head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .ecsx-role__head code {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+  }
+
+  .ecsx-role__meta {
+    margin: 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 0.75rem;
+    row-gap: 0.4rem;
+    align-items: baseline;
+  }
+
+  .ecsx-role__meta dt {
+    font-size: var(--sl-text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--sl-color-gray-3);
+    white-space: nowrap;
+  }
+
+  .ecsx-role__meta dd {
+    margin: 0;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-1, var(--sl-color-white));
+  }
+
+  .ecsx-role__meta code {
+    font-size: var(--sl-text-xs);
+    word-break: break-word;
+  }
+`}</style>

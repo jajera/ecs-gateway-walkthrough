@@ -1,0 +1,347 @@
+---
+title: Create VPC
+description: Bootstrap a custom two-AZ VPC — public subnets for the ALB and NAT, private subnets for ECS tasks — using only the AWS CLI.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+Internet-facing load balancers sit in **public** subnets. ECS tasks and the EC2 container instance sit in **private** subnets. Outbound pulls (images, ECS agent, logs) use a **NAT gateway**. Both the EC2 and Fargate paths share this VPC.
+
+<figure
+  class="ecsx-vpc-map not-content"
+  aria-label="A 10.90.0.0/16 VPC spanning two Availability Zones. Each AZ has a public subnet; the gateway ALB spans both. A single NAT gateway in the first public subnet gives the private subnets outbound access through the internet gateway."
+>
+  <span class="ecsx-vpc-map__tag">
+    <img src={icon("icons/service/networking/Arch_Amazon-Virtual-Private-Cloud_64.svg")} alt="" aria-hidden="true" width="22" height="22" />
+    VPC <code>10.90.0.0/16</code>
+  </span>
+  <div class="ecsx-vpc-map__edge">
+    <span class="ecsx-vpc-map__igw">
+      <img src={icon("icons/resource/networking/Res_Amazon-VPC_Internet-Gateway_48.svg")} alt="" aria-hidden="true" width="20" height="20" />
+      Internet gateway
+    </span>
+  </div>
+  <div class="ecsx-vpc-map__azs">
+    <section class="ecsx-azbox">
+      <span class="ecsx-azbox__name">AZ-A</span>
+      <div class="ecsx-sub ecsx-sub--public">
+        <span class="ecsx-sub__role">
+          public · <code>10.90.1.0/24</code>
+        </span>
+        <div class="ecsx-sub__items">
+          <span class="ecsx-pill ecsx-pill--accent">
+            <img src={icon("icons/resource/networking/Res_Elastic-Load-Balancing_Application-Load-Balancer_48.svg")} alt="" aria-hidden="true" width="18" height="18" />
+            Gateway ALB
+          </span>
+          <span class="ecsx-pill">
+            <img src={icon("icons/resource/networking/Res_Amazon-VPC_NAT-Gateway_48.svg")} alt="" aria-hidden="true" width="18" height="18" />
+            NAT gateway
+          </span>
+        </div>
+      </div>
+      <div class="ecsx-sub ecsx-sub--private">
+        <span class="ecsx-sub__role">
+          private · <code>10.90.11.0/24</code>
+        </span>
+        <div class="ecsx-sub__items">
+          <span class="ecsx-pill">
+            <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Service_48.svg")} alt="" aria-hidden="true" width="18" height="18" />
+            ECS tasks / EC2
+          </span>
+        </div>
+      </div>
+    </section>
+    <section class="ecsx-azbox">
+      <span class="ecsx-azbox__name">AZ-B</span>
+      <div class="ecsx-sub ecsx-sub--public">
+        <span class="ecsx-sub__role">
+          public · <code>10.90.2.0/24</code>
+        </span>
+        <div class="ecsx-sub__items">
+          <span class="ecsx-pill ecsx-pill--accent">
+            <img src={icon("icons/resource/networking/Res_Elastic-Load-Balancing_Application-Load-Balancer_48.svg")} alt="" aria-hidden="true" width="18" height="18" />
+            Gateway ALB
+          </span>
+        </div>
+      </div>
+      <div class="ecsx-sub ecsx-sub--private">
+        <span class="ecsx-sub__role">
+          private · <code>10.90.12.0/24</code>
+        </span>
+        <div class="ecsx-sub__items">
+          <span class="ecsx-pill">
+            <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Service_48.svg")} alt="" aria-hidden="true" width="18" height="18" />
+            ECS tasks / EC2
+          </span>
+        </div>
+      </div>
+    </section>
+  </div>
+  <figcaption class="ecsx-vpc-map__cap">The ALB spans both public subnets. Private subnets route outbound through the single NAT gateway in AZ-A → internet gateway.</figcaption>
+</figure>
+
+Reuse an existing two-AZ VPC with the same layout if you already have one — export the IDs into the same variable names and skip to [Infra roles](/setup/infra-roles/).
+
+<Aside type="tip">
+  Keep this shell open. Later pages reuse `$VPC_ID`, `$PUBLIC_SUBNET_A` / `$PUBLIC_SUBNET_B` (gateway ALB), and `$PRIVATE_SUBNET_A` / `$PRIVATE_SUBNET_B` (services). Confirm
+  [Prerequisites](/setup/prerequisites/) variables (`$NAME`, `$AWS_REGION`) are set.
+</Aside>
+
+<Aside type="caution">This lab uses **one NAT gateway** (cheaper for a demo). Production often uses one NAT per AZ. Tear down when finished — NAT and ALB hours add cost.</Aside>
+
+## Pick two Availability Zones
+
+```bash
+AZ_A=$(aws ec2 describe-availability-zones \
+  --query 'AvailabilityZones[?State==`available`].ZoneName | [0]' \
+  --output text)
+AZ_B=$(aws ec2 describe-availability-zones \
+  --query 'AvailabilityZones[?State==`available`].ZoneName | [1]' \
+  --output text)
+export AZ_A AZ_B
+echo "$AZ_A $AZ_B"
+```
+
+## VPC and internet gateway
+
+```bash
+VPC_ID=$(aws ec2 create-vpc \
+  --cidr-block 10.90.0.0/16 \
+  --tag-specifications "ResourceType=vpc,Tags=[{Key=Name,Value=${NAME}}]" \
+  --query Vpc.VpcId --output text)
+export VPC_ID
+
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-support Value=true
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames Value=true
+
+IGW_ID=$(aws ec2 create-internet-gateway \
+  --tag-specifications "ResourceType=internet-gateway,Tags=[{Key=Name,Value=${NAME}}]" \
+  --query InternetGateway.InternetGatewayId --output text)
+export IGW_ID
+
+aws ec2 attach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID"
+```
+
+## Public subnets (ALB + NAT)
+
+```bash
+PUBLIC_SUBNET_A=$(aws ec2 create-subnet \
+  --vpc-id "$VPC_ID" \
+  --cidr-block 10.90.1.0/24 \
+  --availability-zone "$AZ_A" \
+  --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${NAME}-public-a}]" \
+  --query Subnet.SubnetId --output text)
+
+PUBLIC_SUBNET_B=$(aws ec2 create-subnet \
+  --vpc-id "$VPC_ID" \
+  --cidr-block 10.90.2.0/24 \
+  --availability-zone "$AZ_B" \
+  --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${NAME}-public-b}]" \
+  --query Subnet.SubnetId --output text)
+export PUBLIC_SUBNET_A PUBLIC_SUBNET_B
+
+aws ec2 modify-subnet-attribute --subnet-id "$PUBLIC_SUBNET_A" --map-public-ip-on-launch
+aws ec2 modify-subnet-attribute --subnet-id "$PUBLIC_SUBNET_B" --map-public-ip-on-launch
+
+PUBLIC_RTB_ID=$(aws ec2 create-route-table \
+  --vpc-id "$VPC_ID" \
+  --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${NAME}-public}]" \
+  --query RouteTable.RouteTableId --output text)
+export PUBLIC_RTB_ID
+
+aws ec2 create-route --route-table-id "$PUBLIC_RTB_ID" \
+  --destination-cidr-block 0.0.0.0/0 --gateway-id "$IGW_ID"
+
+aws ec2 associate-route-table --route-table-id "$PUBLIC_RTB_ID" --subnet-id "$PUBLIC_SUBNET_A"
+aws ec2 associate-route-table --route-table-id "$PUBLIC_RTB_ID" --subnet-id "$PUBLIC_SUBNET_B"
+```
+
+## NAT gateway
+
+```bash
+EIP_ALLOC_ID=$(aws ec2 allocate-address --domain vpc \
+  --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=${NAME}-nat}]" \
+  --query AllocationId --output text)
+export EIP_ALLOC_ID
+
+NAT_GW_ID=$(aws ec2 create-nat-gateway \
+  --subnet-id "$PUBLIC_SUBNET_A" \
+  --allocation-id "$EIP_ALLOC_ID" \
+  --tag-specifications "ResourceType=natgateway,Tags=[{Key=Name,Value=${NAME}}]" \
+  --query NatGateway.NatGatewayId --output text)
+export NAT_GW_ID
+
+echo "Waiting for NAT gateway (often 1–3 minutes)..."
+aws ec2 wait nat-gateway-available --nat-gateway-ids "$NAT_GW_ID"
+echo "NAT ready"
+```
+
+Do not create the private default route until the NAT gateway is `available`. If `wait` times out, check `aws ec2 describe-nat-gateways --nat-gateway-ids "$NAT_GW_ID"`.
+
+## Private subnets (ECS tasks / EC2 instance)
+
+```bash
+PRIVATE_SUBNET_A=$(aws ec2 create-subnet \
+  --vpc-id "$VPC_ID" \
+  --cidr-block 10.90.11.0/24 \
+  --availability-zone "$AZ_A" \
+  --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${NAME}-private-a}]" \
+  --query Subnet.SubnetId --output text)
+
+PRIVATE_SUBNET_B=$(aws ec2 create-subnet \
+  --vpc-id "$VPC_ID" \
+  --cidr-block 10.90.12.0/24 \
+  --availability-zone "$AZ_B" \
+  --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${NAME}-private-b}]" \
+  --query Subnet.SubnetId --output text)
+export PRIVATE_SUBNET_A PRIVATE_SUBNET_B
+
+PRIVATE_RTB_ID=$(aws ec2 create-route-table \
+  --vpc-id "$VPC_ID" \
+  --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${NAME}-private}]" \
+  --query RouteTable.RouteTableId --output text)
+export PRIVATE_RTB_ID
+
+aws ec2 create-route --route-table-id "$PRIVATE_RTB_ID" \
+  --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "$NAT_GW_ID"
+
+aws ec2 associate-route-table --route-table-id "$PRIVATE_RTB_ID" --subnet-id "$PRIVATE_SUBNET_A"
+aws ec2 associate-route-table --route-table-id "$PRIVATE_RTB_ID" --subnet-id "$PRIVATE_SUBNET_B"
+
+echo "VPC=$VPC_ID"
+echo "PUBLIC  $PUBLIC_SUBNET_A ($AZ_A) $PUBLIC_SUBNET_B ($AZ_B)"
+echo "PRIVATE $PRIVATE_SUBNET_A ($AZ_A) $PRIVATE_SUBNET_B ($AZ_B)"
+```
+
+Gateway ALBs use the **public** pair. Services and the EC2 instance use the **private** pair (`assignPublicIp=DISABLED`). AZ names match across public and private so gateway AZ coverage stays compatible with the services.
+
+## Next
+
+[Infra roles](/setup/infra-roles/)
+
+<style>{`
+  .ecsx-vpc-map {
+    margin-block: 1.5rem;
+    padding: 1.5rem 1rem 1rem;
+    position: relative;
+    border: 1.5px solid var(--sl-color-accent);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--sl-color-accent) 5%, var(--sl-color-black));
+  }
+
+  .ecsx-vpc-map__tag {
+    position: absolute;
+    top: -0.8rem;
+    left: 1rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 0.4rem;
+    background: var(--sl-color-black);
+    border: 1px solid var(--sl-color-accent);
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-vpc-map__edge {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 0.9rem;
+  }
+
+  .ecsx-vpc-map__igw {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    border: 1px dashed var(--sl-color-gray-4);
+    border-radius: 0.4rem;
+    background: var(--sl-color-gray-6);
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-vpc-map__azs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 0.75rem;
+  }
+
+  .ecsx-azbox {
+    padding: 0.85rem;
+    border: 1px dashed var(--sl-color-gray-4);
+    border-radius: 0.55rem;
+    background: color-mix(in srgb, var(--sl-color-white) 2%, transparent);
+  }
+
+  .ecsx-azbox__name {
+    display: inline-block;
+    margin-bottom: 0.6rem;
+    font-size: var(--sl-text-xs);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-sub {
+    padding: 0.6rem 0.7rem;
+    border-radius: 0.45rem;
+    border: 1px solid var(--sl-color-gray-5);
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-sub + .ecsx-sub {
+    margin-top: 0.5rem;
+  }
+
+  .ecsx-sub--public {
+    border-left: 3px solid var(--sl-color-accent);
+  }
+
+  .ecsx-sub--private {
+    border-left: 3px solid var(--sl-color-gray-3);
+  }
+
+  .ecsx-sub__role {
+    display: block;
+    margin-bottom: 0.4rem;
+    font-size: var(--sl-text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-sub__items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .ecsx-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 0.3rem;
+    border: 1px solid var(--sl-color-gray-5);
+    background: var(--sl-color-black);
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-pill--accent {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-accent);
+  }
+
+  .ecsx-vpc-map__cap {
+    margin-top: 0.9rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+`}</style>

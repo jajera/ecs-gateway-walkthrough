@@ -1,0 +1,293 @@
+---
+title: Choose a path
+description: After the shared VPC and IAM roles, pick EC2 or Fargate — each path has its own cluster and gateway.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+Shared setup is done. From here the walkthrough **splits**. Each path creates its **own cluster and
+gateway** in the same VPC. Run one path or both — they do not share a gateway.
+
+<div class="ecsx-fork not-content" aria-label="Shared setup branches into an EC2 path and a Fargate path, which rejoin at shared teardown.">
+  <div class="ecsx-fork__node ecsx-fork__node--done">
+    <span class="ecsx-fork__check" aria-hidden="true">
+      ✓
+    </span>
+    <span class="ecsx-fork__title">Shared setup</span>
+    <span class="ecsx-fork__sub">VPC · IAM roles</span>
+  </div>
+  <span class="ecsx-fork__split" aria-hidden="true">
+    ⤲
+  </span>
+  <div class="ecsx-fork__branches">
+    <div class="ecsx-fork__node">
+      <img src={icon("icons/service/compute/Arch_Amazon-EC2_64.svg")} alt="" aria-hidden="true" width="30" height="30" loading="lazy" />
+      <span class="ecsx-fork__title">EC2 path</span>
+      <span class="ecsx-fork__sub">
+        <code>ecs-gw-lab-ec2</code> cluster + gateway
+      </span>
+    </div>
+    <div class="ecsx-fork__node">
+      <img src={icon("icons/service/containers/Arch_AWS-Fargate_64.svg")} alt="" aria-hidden="true" width="30" height="30" loading="lazy" />
+      <span class="ecsx-fork__title">Fargate path</span>
+      <span class="ecsx-fork__sub">
+        <code>ecs-gw-lab-fargate</code> cluster + gateway
+      </span>
+    </div>
+  </div>
+  <span class="ecsx-fork__split ecsx-fork__split--join" aria-hidden="true">
+    ⤳
+  </span>
+  <div class="ecsx-fork__node ecsx-fork__node--end">
+    <span class="ecsx-fork__icon" aria-hidden="true">
+      🧹
+    </span>
+    <span class="ecsx-fork__title">Shared teardown</span>
+    <span class="ecsx-fork__sub">when both are done</span>
+  </div>
+</div>
+
+<div class="ecsx-paths not-content">
+  <a class="ecsx-path" href="/ec2/overview/">
+    <img src={icon("icons/service/compute/Arch_Amazon-EC2_64.svg")} alt="Amazon EC2" width="52" height="52" loading="lazy" />
+    <span class="ecsx-path__title">EC2 path</span>
+    <span class="ecsx-path__sub">Launch an ECS-optimized instance, create a cluster and gateway, deploy two services, verify, tear down.</span>
+    <span class="ecsx-path__cta">Start EC2 →</span>
+  </a>
+  <a class="ecsx-path" href="/fargate/overview/">
+    <img src={icon("icons/service/containers/Arch_AWS-Fargate_64.svg")} alt="AWS Fargate" width="52" height="52" loading="lazy" />
+    <span class="ecsx-path__title">Fargate path</span>
+    <span class="ecsx-path__sub">Create a Fargate cluster and gateway, deploy two services, verify, tear down. No instances to manage.</span>
+    <span class="ecsx-path__cta">Start Fargate →</span>
+  </a>
+</div>
+
+## Which should I pick?
+
+For the **gateway** it makes no difference — same connector, same shared ALB, same managed
+hostnames. The only question is who runs the host.
+
+<div class="ecsx-pick not-content">
+  <div class="ecsx-pick__col ecsx-pick__col--default">
+    <div class="ecsx-pick__head">
+      <img src={icon("icons/service/containers/Arch_AWS-Fargate_64.svg")} alt="" aria-hidden="true" width="30" height="30" loading="lazy" />
+      <span>
+        Fargate <span class="ecsx-pick__tag">default</span>
+      </span>
+    </div>
+    <ul>
+      <li>No servers to manage — AWS runs the host</li>
+      <li>Bursty or variable load; scales to zero between tasks</li>
+      <li>Least operational overhead</li>
+      <li>Standard web services and APIs</li>
+    </ul>
+  </div>
+  <div class="ecsx-pick__col ecsx-pick__col--ec2">
+    <div class="ecsx-pick__head">
+      <img src={icon("icons/service/compute/Arch_Amazon-EC2_64.svg")} alt="" aria-hidden="true" width="30" height="30" loading="lazy" />
+      <span>Choose EC2 when</span>
+    </div>
+    <ul>
+      <li>Steady, high utilization — often cheaper (Savings Plans, Spot, Graviton)</li>
+      <li>You need GPUs or specific instance types Fargate doesn't offer</li>
+      <li>Host-level control — privileged containers, kernel params, custom runtimes</li>
+      <li>Bin-packing many small tasks onto fewer hosts, or an existing fleet</li>
+    </ul>
+  </div>
+</div>
+
+<Aside type="tip">Not sure? Pick **Fargate**. It is the lower-overhead default; move to EC2 only when you hit one of the reasons on the right.</Aside>
+
+<Aside type="tip">In production, Fargate and EC2 services can share one cluster and one gateway. This lab keeps paths separate so you can run either alone.</Aside>
+
+## Shared teardown reminder
+
+After you finish a path's own teardown page, delete the shared VPC and IAM roles only when you are
+done with **both** paths (see the teardown page you used — it ends with shared cleanup).
+
+<style>{`
+  .ecsx-fork,
+  .ecsx-paths {
+    margin-block: 1.5rem;
+  }
+
+  /* --- Fork diagram --- */
+  .ecsx-fork {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 1.25rem 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-black);
+  }
+
+  .ecsx-fork__node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.75rem 0.9rem;
+    min-width: 9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.55rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+  }
+
+  .ecsx-fork__node--done {
+    border-color: #3fb950;
+  }
+
+  .ecsx-fork__node--end {
+    border-style: dashed;
+  }
+
+  .ecsx-fork__branches {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ecsx-fork__title {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-fork__sub {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-fork__sub code {
+    font-size: var(--sl-text-xs);
+  }
+
+  .ecsx-fork__check {
+    font-size: 1.5rem;
+    line-height: 1;
+    color: #3fb950;
+  }
+
+  .ecsx-fork__icon {
+    font-size: 1.5rem;
+    line-height: 1;
+  }
+
+  .ecsx-fork__split {
+    font-size: 1.6rem;
+    color: var(--sl-color-accent);
+    flex: 0 0 auto;
+  }
+
+  /* --- Path cards --- */
+  .ecsx-paths {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.75rem;
+  }
+
+  .ecsx-path {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 1.5rem 1.2rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+    text-decoration: none;
+    color: inherit;
+    transition:
+      border-color 0.15s ease,
+      transform 0.15s ease;
+  }
+
+  .ecsx-path:hover {
+    border-color: var(--sl-color-accent);
+    transform: translateY(-2px);
+  }
+
+  .ecsx-path__title {
+    font-size: var(--sl-text-lg);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-path__sub {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-path__cta {
+    margin-top: 0.3rem;
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-accent);
+  }
+
+  .ecsx-pick {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.75rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-pick__col {
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-pick__col--default {
+    border-top: 3px solid var(--sl-color-accent);
+  }
+
+  .ecsx-pick__col--ec2 {
+    border-top: 3px solid var(--sl-color-gray-3);
+  }
+
+  .ecsx-pick__head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-pick__tag {
+    padding: 0.05rem 0.4rem;
+    border-radius: 0.3rem;
+    background: var(--sl-color-accent);
+    color: var(--sl-color-black);
+    font-size: var(--sl-text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .ecsx-pick__col ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-1, var(--sl-color-white));
+  }
+
+  @media (max-width: 36rem) {
+    .ecsx-fork__split {
+      transform: rotate(90deg);
+    }
+  }
+`}</style>

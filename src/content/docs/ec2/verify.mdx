@@ -1,0 +1,331 @@
+---
+title: EC2 verify
+description: Wait for ACTIVE gateway routes on the EC2 path, curl HTTPS URLs, and confirm both services share one ALB.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Use `$GATEWAY` / `$CLUSTER` / `$PATH_NAME` from the EC2 path (`${NAME}-ec2`). ALB provisioning often takes a few minutes after the first service connects.
+
+<div class="ecsx-checklist not-content" aria-label="Success criteria for this page.">
+  <span class="ecsx-checklist__title">You're done when all three are true:</span>
+  <ul>
+    <li>
+      <span class="ecsx-check" aria-hidden="true">
+        ✓
+      </span>{" "}
+      Both gateway routes report <code>ACTIVE</code>
+    </li>
+    <li>
+      <span class="ecsx-check" aria-hidden="true">
+        ✓
+      </span>{" "}
+      Orders and Catalog each render on their own <code>*.ecs.&lt;region&gt;.on.aws</code> hostname
+    </li>
+    <li>
+      <span class="ecsx-check" aria-hidden="true">
+        ✓
+      </span>{" "}
+      Both routes resolve to the <strong>same</strong> ALB
+    </li>
+  </ul>
+</div>
+
+<Aside type="note">Each step shows one command with sample output directly below it. Host IDs in sample URLs are placeholders; your values differ. ARNs and account IDs are omitted.</Aside>
+
+## Wait for routes
+
+Break only when every listed status is `ACTIVE` (not merely “no longer in progress”).
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+for i in $(seq 1 60); do
+  STATUSES=$(aws ecs list-gateway-routes --gateway "$GATEWAY" --cluster "$CLUSTER" \
+    --query 'gatewayRoutes[].status' --output text)
+  echo "$i: $STATUSES"
+  BAD=$(echo "$STATUSES" | tr '\t' '\n' | grep -cv '^ACTIVE$' || true)
+  [ "$BAD" = "0" ] && [ -n "$STATUSES" ] && break
+  sleep 10
+done
+```
+
+```text
+1: CREATE_IN_PROGRESS CREATE_IN_PROGRESS
+2: CREATE_IN_PROGRESS ACTIVE
+3: ACTIVE ACTIVE
+```
+
+</div>
+
+## Service URLs
+
+Define a helper that resolves a service’s managed HTTPS URL (route ARNs are not printed):
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+url_for() {
+  local svc="$1"
+  local arn
+  arn=$(aws ecs list-gateway-routes --gateway "$GATEWAY" --cluster "$CLUSTER" \
+    --service "$svc" \
+    --query 'gatewayRoutes[0].gatewayRouteArn' --output text)
+  aws ecs describe-gateway-route --gateway-route-arn "$arn" \
+    --query 'gatewayRoute.serviceUrl' --output text
+}
+
+URL_A=$(url_for "${PATH_NAME}-a")
+URL_B=$(url_for "${PATH_NAME}-b")
+echo "a: $URL_A"
+echo "b: $URL_B"
+```
+
+```text
+a: https://ec-<orders-id>.ecs.ap-southeast-6.on.aws
+b: https://ec-<catalog-id>.ecs.ap-southeast-6.on.aws
+```
+
+</div>
+
+Poll until each page title matches (tasks may still be pending / draining right after a deploy):
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+for i in $(seq 1 48); do
+  TITLE_A=$(curl -sS --max-time 15 "$URL_A" 2>/dev/null \
+    | sed -n 's/.*<h1>\([^<]*\)<\/h1>.*/\1/p' | head -1 || true)
+  TITLE_B=$(curl -sS --max-time 15 "$URL_B" 2>/dev/null \
+    | sed -n 's/.*<h1>\([^<]*\)<\/h1>.*/\1/p' | head -1 || true)
+  echo "$i: a=${TITLE_A:-?} b=${TITLE_B:-?}"
+  [ "$TITLE_A" = "Orders" ] && [ "$TITLE_B" = "Catalog" ] && break
+  sleep 10
+done
+```
+
+```text
+1: a=? b=?
+2: a=Orders b=?
+3: a=Orders b=Catalog
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+echo "Orders  -> $URL_A"
+echo "Catalog -> $URL_B"
+```
+
+```text
+Orders  -> https://ec-<orders-id>.ecs.ap-southeast-6.on.aws
+Catalog -> https://ec-<catalog-id>.ecs.ap-southeast-6.on.aws
+```
+
+</div>
+
+Expect **Orders** on service A and **Catalog** on service B (open both in a browser). Hostnames are ECS-managed (`*.ecs.<region>.on.aws`).
+
+Open both URLs — two different apps, each on its own managed hostname:
+
+<div class="ecsx-apps not-content">
+  <figure class="ecsx-app">
+    <img
+      src="/img/ec2-orders.png"
+      alt="The Orders app rendered in a browser: a blue card titled Orders, noting the page is served by service ecs-gw-lab-ec2-a behind the EC2-path gateway."
+      loading="lazy"
+      width="1000"
+    />
+    <figcaption>
+      Service <code>-a</code> → <strong>Orders</strong>
+    </figcaption>
+  </figure>
+  <figure class="ecsx-app">
+    <img
+      src="/img/ec2-catalog.png"
+      alt="The Catalog app rendered in a browser: a green card titled Catalog, noting the page is served by service ecs-gw-lab-ec2-b on a different hostname — same ALB, different route."
+      loading="lazy"
+      width="1000"
+    />
+    <figcaption>
+      Service <code>-b</code> → <strong>Catalog</strong>
+    </figcaption>
+  </figure>
+</div>
+
+Same ALB, two hostnames, two apps — host-based routing, running on your EC2 capacity.
+
+## Shared ALB check
+
+Print load balancer **names** only (strip the ARN prefix so account IDs stay out of the paste buffer):
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+for ARN in $(aws ecs list-gateway-routes --gateway "$GATEWAY" --cluster "$CLUSTER" \
+  --query 'gatewayRoutes[].gatewayRouteArn' --output text); do
+  aws ecs describe-gateway-route --gateway-route-arn "$ARN" \
+    --query 'gatewayRoute.resources.hostSharedAlb[0].loadBalancerArn' \
+    --output text | awk -F: '{print $NF}'
+done
+```
+
+```text
+loadbalancer/app/ecs-gateway-alb-<id>/…
+loadbalancer/app/ecs-gateway-alb-<id>/…
+```
+
+</div>
+
+Both lines should match — one host-shared ALB for both services on this gateway.
+
+## Confirm in the console (optional)
+
+The CLI output above is the source of truth, but the console makes the shared-ALB story easy to see. The gateway, routes, ALB, and certs look the same as the Fargate path — only the compute behind the tasks differs.
+
+<figure class="ecsx-shot">
+  <img
+    src="/img/ec2-gateway-routes.png"
+    alt="ECS Gateway routes tab showing two routes, both Active, one mapped to the Orders service and one to the Catalog service, on the EC2-path cluster."
+    loading="lazy"
+    width="1024"
+  />
+  <figcaption>
+    <strong>ECS → Gateways → your gateway → Gateway routes.</strong> Two routes, both <code>ACTIVE</code> — one per service.
+  </figcaption>
+</figure>
+
+<figure class="ecsx-shot">
+  <img
+    src="/img/ec2-alb-resource-map.png"
+    alt="EC2 load balancer resource map: one Application Load Balancer with an HTTPS 443 listener, three rules (two host-header rules plus a default), each host rule forwarding to its own target group with one healthy target."
+    loading="lazy"
+    width="1024"
+  />
+  <figcaption>
+    <strong>EC2 → Load balancers → the gateway ALB → Resource map.</strong> One ALB, one HTTPS 443 listener, two host-header rules each forwarding to its own target group.
+  </figcaption>
+</figure>
+
+<figure class="ecsx-shot">
+  <img
+    src="/img/ec2-acm-certs.png"
+    alt="AWS Certificate Manager list showing two Amazon-issued certificates, both Issued and In use, one for each managed ecs.<region>.on.aws hostname on the EC2 path."
+    loading="lazy"
+    width="1024"
+  />
+  <figcaption>
+    <strong>Certificate Manager → Certificates.</strong> Two Amazon-issued certs, both <code>Issued</code> and <strong>In use</strong> — one per managed hostname, created by ECS via the infrastructure
+    role.
+  </figcaption>
+</figure>
+
+<Aside type="note">
+  There is **no Route 53 record in your account** for these URLs. The `*.ecs.<region>.on.aws`
+  hostnames live in an AWS service-managed zone — you would only use Route 53 if you put your own
+  custom domain in front of the gateway.
+</Aside>
+
+<Aside type="note">Screenshots are illustrative. Your hostnames, IDs, and ARNs differ, and the console UI changes over time — trust the CLI output for the real result.</Aside>
+
+## Next
+
+[EC2 teardown](/ec2/teardown/)
+
+<style>{`
+  .ecsx-cli {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-block: 1rem;
+  }
+
+  .ecsx-cli > * {
+    margin-block: 0 !important;
+  }
+
+  .ecsx-checklist {
+    margin-block: 1.25rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-left: 3px solid #3fb950;
+    border-radius: 0.5rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-checklist__title {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-checklist ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .ecsx-checklist li {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: var(--sl-text-sm);
+  }
+
+  .ecsx-check {
+    color: #3fb950;
+    font-weight: 700;
+    flex: 0 0 auto;
+  }
+
+  .ecsx-apps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.75rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-app {
+    margin: 0;
+  }
+
+  .ecsx-app img {
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    display: block;
+  }
+
+  .ecsx-app figcaption {
+    margin-top: 0.4rem;
+    text-align: center;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  .ecsx-shot {
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-shot img {
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-black);
+  }
+
+  .ecsx-shot figcaption {
+    margin-top: 0.5rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+`}</style>

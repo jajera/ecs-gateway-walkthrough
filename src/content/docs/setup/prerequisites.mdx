@@ -1,0 +1,321 @@
+---
+title: Prerequisites
+description: AWS CLI version, Region, IAM, and shell setup for the ECS Gateway self serve lab.
+---
+
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+Three gates before you start: a recent AWS CLI, a Region with ECS Gateway, and credentials that can
+create the networking, IAM, ECS, and load balancer resources the lab touches.
+
+<div class="ecsx-gates not-content">
+  <div class="ecsx-gate">
+    <span class="ecsx-gate__icon" aria-hidden="true">
+      🖥️
+    </span>
+    <span class="ecsx-gate__key">AWS CLI</span>
+    <span class="ecsx-gate__val">2.38.3 or newer (v2 only)</span>
+  </div>
+  <div class="ecsx-gate">
+    <span class="ecsx-gate__icon" aria-hidden="true">
+      🌏
+    </span>
+    <span class="ecsx-gate__key">Region</span>
+    <span class="ecsx-gate__val">
+      Any commercial · lab uses <code>ap-southeast-6</code>
+    </span>
+  </div>
+  <div class="ecsx-gate">
+    <span class="ecsx-gate__icon" aria-hidden="true">
+      🔑
+    </span>
+    <span class="ecsx-gate__key">Access</span>
+    <span class="ecsx-gate__val">VPC · IAM · ECS · ELB in that Region</span>
+  </div>
+</div>
+
+## AWS CLI and Region
+
+You need AWS CLI **2.38.3** or later. That is the first v2 release with `create-gateway` and the other ECS Gateway commands. CLI v1 never includes these commands.
+
+<Tabs syncKey="os">
+  <TabItem label="macOS">
+
+```bash
+brew install awscli
+# already installed: brew upgrade awscli
+```
+
+  </TabItem>
+  <TabItem label="Linux">
+
+Install `unzip` and `curl` first if needed (`sudo apt install -y unzip curl` or `sudo dnf install -y unzip curl`).
+
+```bash
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install --update
+```
+
+ARM:
+
+```bash
+curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install --update
+```
+
+  </TabItem>
+</Tabs>
+
+```bash
+aws --version
+aws sts get-caller-identity >/dev/null
+aws ecs create-gateway help
+```
+
+`aws --version` must show `aws-cli/2.38.3` or newer. If `help` says the command is invalid, the CLI is too old. `get-caller-identity` only checks that you are signed in; redirect keeps account details out of the terminal scrollback you might copy.
+
+ECS Gateway is available in **all commercial Regions**. Credentials must be able to call ECS, EC2, IAM, and ELB in the Region where you run the lab. The lab uses `ap-southeast-6` (Asia Pacific — New Zealand). Opt in that Region on the account if it is not already enabled.
+
+## Permissions
+
+Your credentials need enough access across four services:
+
+<div class="ecsx-perms not-content">
+  <div class="ecsx-perm">
+    <img src={icon("icons/service/networking/Arch_Amazon-Virtual-Private-Cloud_64.svg")} alt="Amazon VPC" width="34" height="34" loading="lazy" />
+    <div>
+      <strong>Networking</strong>
+      <span>VPC, subnets, internet gateway, route tables</span>
+    </div>
+  </div>
+  <div class="ecsx-perm">
+    <img src={icon("icons/service/security/Arch_AWS-Identity-and-Access-Management_64.svg")} alt="AWS IAM" width="34" height="34" loading="lazy" />
+    <div>
+      <strong>IAM</strong>
+      <span>
+        Create roles, attach managed policies, <code>iam:PassRole</code> for the infra and task execution roles
+      </span>
+    </div>
+  </div>
+  <div class="ecsx-perm">
+    <img src={icon("icons/service/containers/Arch_Amazon-Elastic-Container-Service_64.svg")} alt="Amazon ECS" width="34" height="34" loading="lazy" />
+    <div>
+      <strong>ECS + Gateway</strong>
+      <span>
+        Clusters, task definitions, services, and the gateway APIs (<code>CreateGateway</code>, associate, list/describe routes, delete)
+      </span>
+    </div>
+  </div>
+  <div class="ecsx-perm">
+    <img src={icon("icons/service/networking/Arch_Elastic-Load-Balancing_64.svg")} alt="Elastic Load Balancing" width="34" height="34" loading="lazy" />
+    <div>
+      <strong>Load balancing</strong>
+      <span>ELB access so ECS can provision the ALB path on your behalf</span>
+    </div>
+  </div>
+</div>
+
+## Shell variables
+
+Keep one shell for the whole lab. Later pages reuse these names.
+
+```bash
+export AWS_PAGER=""
+export AWS_REGION=ap-southeast-6
+export AWS_DEFAULT_REGION="$AWS_REGION"
+export NAME=ecs-gw-lab
+
+aws sts get-caller-identity >/dev/null
+echo "Authenticated. region=$AWS_REGION NAME=$NAME"
+```
+
+Confirm you are signed in. Do not paste account IDs, ARNs, or other identity output into issues, PRs, or docs.
+
+<Aside type="caution">
+  This lab creates a **custom** two-AZ VPC (public ALB/NAT subnets + private service subnets). It does not use the default VPC. Tear down when finished — NAT and ALB hours add cost while the lab is
+  up.
+</Aside>
+
+## Lab path
+
+<div class="ecsx-path-flow not-content">
+  <div class="ecsx-pf">
+    <span class="ecsx-pf__n">1</span>
+    <span class="ecsx-pf__title">Shared setup</span>
+    <span class="ecsx-pf__sub">
+      <a href="/setup/vpc/">VPC</a> + <a href="/setup/infra-roles/">infra roles</a>
+    </span>
+  </div>
+  <span class="ecsx-pf__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-pf">
+    <span class="ecsx-pf__n">2</span>
+    <span class="ecsx-pf__title">
+      <a href="/setup/choose-path/">Choose a path</a>
+    </span>
+    <span class="ecsx-pf__sub">EC2 or Fargate — own cluster + gateway each</span>
+  </div>
+  <span class="ecsx-pf__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-pf">
+    <span class="ecsx-pf__n">3</span>
+    <span class="ecsx-pf__title">Tear down</span>
+    <span class="ecsx-pf__sub">the path you ran, then the shared VPC</span>
+  </div>
+</div>
+
+## Next
+
+[Create VPC](/setup/vpc/)
+
+<style>{`
+  .ecsx-gates,
+  .ecsx-perms,
+  .ecsx-path-flow {
+    margin-block: 1.25rem;
+  }
+
+  /* --- Gates at a glance --- */
+  .ecsx-gates {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 0.5rem;
+  }
+
+  .ecsx-gate {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+    column-gap: 0.6rem;
+    align-items: center;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-left: 3px solid var(--sl-color-accent);
+    border-radius: 0.5rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-gate__icon {
+    grid-row: 1 / 3;
+    font-size: 1.6rem;
+  }
+
+  .ecsx-gate__key {
+    font-size: var(--sl-text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-gate__val {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  /* --- Permissions by service --- */
+  .ecsx-perms {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.6rem;
+  }
+
+  .ecsx-perm {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-perm img {
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+  }
+
+  .ecsx-perm div {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    text-align: left;
+  }
+
+  .ecsx-perm strong {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-perm span {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  /* --- Lab path flow --- */
+  .ecsx-path-flow {
+    display: flex;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .ecsx-pf {
+    position: relative;
+    flex: 1 1 12rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 1.1rem 1rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-pf__n {
+    position: absolute;
+    top: -0.7rem;
+    left: 0.9rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--sl-color-accent);
+    color: var(--sl-color-black);
+    font-size: var(--sl-text-xs);
+    font-weight: 800;
+  }
+
+  .ecsx-pf__title {
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-pf__sub {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  .ecsx-pf__arrow {
+    align-self: center;
+    font-size: 1.5rem;
+    color: var(--sl-color-accent);
+    flex: 0 0 auto;
+  }
+
+  @media (max-width: 36rem) {
+    .ecsx-pf__arrow {
+      transform: rotate(90deg);
+    }
+  }
+`}</style>

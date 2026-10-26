@@ -1,0 +1,454 @@
+---
+title: ECS Gateway
+description: Hands on walkthrough for Amazon ECS Gateway self serve ingress — platform owned gateway, app team connectors, shared ALB hostnames.
+template: splash
+hero:
+  tagline: Platform teams define ingress once. Application teams opt in with a connector and get an HTTPS URL — no per-service ALB, ACM, or security group work.
+  actions:
+    - text: Get Started
+      link: /concepts/what-is-ecs-gateway/
+      icon: right-arrow
+      variant: primary
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+## How it fits together
+
+<figure class="ecsx-flow not-content" aria-label="Request flow from the internet through a shared gateway ALB to two ECS services inside one VPC.">
+  <div class="ecsx-node ecsx-node--edge">
+    <span class="ecsx-emoji" aria-hidden="true">🌐</span>
+    <span class="ecsx-node__label">Internet</span>
+  </div>
+
+<span class="ecsx-arrow" aria-hidden="true">
+  →
+</span>
+
+<div class="ecsx-node">
+  <span class="ecsx-node__emoji" aria-hidden="true">
+    🔒
+  </span>
+  <span class="ecsx-node__label">Managed HTTPS URL</span>
+  <span class="ecsx-node__sub">*.ecs.&lt;region&gt;.on.aws</span>
+</div>
+
+<span class="ecsx-arrow" aria-hidden="true">
+  →
+</span>
+
+  <div class="ecsx-vpc">
+    <span class="ecsx-vpc__tag">
+      <img src={icon("icons/service/networking/Arch_Amazon-Virtual-Private-Cloud_64.svg")} alt="Amazon VPC" width="24" height="24" loading="lazy" />
+      Custom two-AZ VPC
+    </span>
+
+    <div class="ecsx-vpc__inner">
+      <div class="ecsx-node ecsx-node--gateway">
+        <img src={icon("icons/resource/networking/Res_Elastic-Load-Balancing_Application-Load-Balancer_48.svg")} alt="Shared Application Load Balancer" width="48" height="48" loading="lazy" />
+        <span class="ecsx-node__label">Shared ALB</span>
+        <span class="ecsx-node__sub">host-based routing · HTTPS 443</span>
+      </div>
+
+      <span class="ecsx-arrow ecsx-arrow--branch" aria-hidden="true">
+        <svg viewBox="0 0 40 60" width="34" height="48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 30 H16 M16 12 V48 M16 12 H32 M16 48 H32" />
+          <path d="M28 8 l5 4 -5 4 M28 44 l5 4 -5 4" />
+        </svg>
+      </span>
+
+      <div class="ecsx-stack">
+        <div class="ecsx-node ecsx-node--sm">
+          <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Service_48.svg")} alt="ECS service" width="40" height="40" loading="lazy" />
+          <span class="ecsx-node__label">Service A</span>
+        </div>
+        <div class="ecsx-node ecsx-node--sm">
+          <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Service_48.svg")} alt="ECS service" width="40" height="40" loading="lazy" />
+          <span class="ecsx-node__label">Service B</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <figcaption class="ecsx-caption">
+    Create a gateway and <strong>nothing</strong> is provisioned. The first ALB appears when the
+    first compatible service connects. Up to 25 services share one ALB.
+  </figcaption>
+</figure>
+
+## The shift
+
+<div class="ecsx-compare not-content">
+  <div class="ecsx-compare__col ecsx-compare__col--before">
+    <h3 class="ecsx-compare__title">Per-service, by hand</h3>
+    <ul class="ecsx-chiplist">
+      <li>🔁 ALB per service</li>
+      <li>🔁 ACM cert</li>
+      <li>🔁 Listener rules</li>
+      <li>🔁 Security groups</li>
+      <li>🔁 WAF + drift</li>
+    </ul>
+    <p class="ecsx-compare__note">Repeated for every new service. Slow onboarding, constant sync.</p>
+  </div>
+
+<span class="ecsx-compare__arrow" aria-hidden="true">
+  →
+</span>
+
+  <div class="ecsx-compare__col ecsx-compare__col--after">
+    <h3 class="ecsx-compare__title">One gateway, opt in</h3>
+    <ul class="ecsx-chiplist">
+      <li>
+        <img src={icon("icons/service/containers/Arch_Amazon-Elastic-Container-Service_64.svg")} alt="" aria-hidden="true" width="22" height="22" />
+        Platform defines ingress once
+      </li>
+      <li>✅ App adds a connector</li>
+      <li>✅ ECS provisions the ALB path</li>
+      <li>✅ Managed HTTPS URL per service</li>
+    </ul>
+    <p class="ecsx-compare__note">New services just reference the gateway. No per-service plumbing.</p>
+  </div>
+</div>
+
+## Who owns what
+
+<div class="ecsx-personas not-content">
+  <div class="ecsx-persona">
+    <div class="ecsx-persona__head">
+      <img src={icon("icons/service/security/Arch_AWS-Identity-and-Access-Management_64.svg")} alt="Platform" width="40" height="40" loading="lazy" />
+      <span>Platform</span>
+    </div>
+    <ul>
+      <li>Gateway + cluster associations</li>
+      <li>Subnets, scheme, optional WAF</li>
+      <li><Tooltip term="infrastructure-role" label="Infrastructure role" /></li>
+    </ul>
+  </div>
+
+  <div class="ecsx-persona">
+    <div class="ecsx-persona__head">
+      <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Task_48.svg")} alt="Application" width="40" height="40" loading="lazy" />
+      <span>Application</span>
+    </div>
+    <ul>
+      <li>Task definition + service</li>
+      <li><Tooltip term="gateway-connector" label="Gateway connector" /></li>
+      <li>Port name, filters, health check</li>
+    </ul>
+  </div>
+</div>
+
+<p class="ecsx-microcopy">Commands are AWS CLI. You build a custom two-AZ VPC (public ALB/NAT, private services), then pick a path. Each path gets its own cluster and gateway; both share the VPC.</p>
+
+## Pick a compute path
+
+<div class="ecsx-paths not-content">
+  <a class="ecsx-path" href="/ec2/overview/">
+    <img src={icon("icons/service/compute/Arch_Amazon-EC2_64.svg")} alt="Amazon EC2" width="56" height="56" loading="lazy" />
+    <span class="ecsx-path__title">EC2 path</span>
+    <span class="ecsx-path__sub">Instance capacity, cluster, gateway, two services, verify, teardown.</span>
+  </a>
+  <a class="ecsx-path" href="/fargate/overview/">
+    <img src={icon("icons/service/containers/Arch_AWS-Fargate_64.svg")} alt="AWS Fargate" width="56" height="56" loading="lazy" />
+    <span class="ecsx-path__title">Fargate path</span>
+    <span class="ecsx-path__sub">Cluster, gateway, two services, verify, teardown. No instances to manage.</span>
+  </a>
+</div>
+
+## What you'll walk through
+
+<CardGrid>
+  <Card title="Concepts" icon="open-book">
+    Account-level gateways, host-shared ALBs, routes, and managed HTTPS hostnames.
+  </Card>
+  <Card title="Architecture" icon="puzzle">
+    Platform versus application ownership, compatibility rules, and what ECS creates for you.
+  </Card>
+  <Card title="Setup" icon="setting">
+    CLI version check, two-AZ VPC, shared IAM roles, then choose EC2 or Fargate.
+  </Card>
+  <Card title="EC2" icon="laptop">
+    Instance capacity, gateway, two services, verify URLs, teardown.
+  </Card>
+  <Card title="Fargate" icon="rocket">
+    Gateway, two services, verify URLs, teardown — no instances to manage.
+  </Card>
+  <Card title="Reference" icon="warning">
+    Pricing, quotas, troubleshooting, and official docs.
+  </Card>
+</CardGrid>
+
+<style>{`
+  .ecsx-flow,
+  .ecsx-compare,
+  .ecsx-personas,
+  .ecsx-paths {
+    margin-block: 1.5rem;
+  }
+
+  /* --- Flow diagram --- */
+  .ecsx-flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 1.25rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-black);
+  }
+
+  .ecsx-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.75rem 0.9rem;
+    min-width: 7rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+  }
+
+  .ecsx-node--edge {
+    background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+  }
+
+  .ecsx-node--gateway {
+    border-color: var(--sl-color-accent);
+    box-shadow: 0 0 0 1px var(--sl-color-accent-low);
+  }
+
+  .ecsx-node--sm {
+    min-width: 6rem;
+    padding: 0.5rem 0.7rem;
+  }
+
+  .ecsx-node__label {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-node__sub {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-emoji {
+    font-size: 2rem;
+    line-height: 1;
+  }
+
+  .ecsx-node__emoji {
+    font-size: 2.3rem;
+    line-height: 1;
+    height: 48px;
+    display: grid;
+    place-items: center;
+  }
+
+  .ecsx-arrow {
+    font-size: 1.5rem;
+    color: var(--sl-color-accent);
+    flex: 0 0 auto;
+  }
+
+  .ecsx-arrow--branch {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* --- VPC boundary --- */
+  .ecsx-vpc {
+    position: relative;
+    padding: 2rem 1rem 1rem;
+    border: 1.5px dashed var(--sl-color-accent);
+    border-radius: 0.6rem;
+    background: color-mix(in srgb, var(--sl-color-accent) 6%, transparent);
+  }
+
+  .ecsx-vpc__tag {
+    position: absolute;
+    top: -0.75rem;
+    left: 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 0.4rem;
+    background: var(--sl-color-black);
+    border: 1px solid var(--sl-color-accent);
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+    color: var(--sl-color-white);
+    white-space: nowrap;
+  }
+
+  .ecsx-vpc__inner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .ecsx-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ecsx-caption {
+    flex-basis: 100%;
+    margin-top: 0.75rem;
+    text-align: center;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  /* --- Compare --- */
+  .ecsx-compare {
+    display: flex;
+    align-items: stretch;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .ecsx-compare__col {
+    flex: 1 1 15rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-compare__col--after {
+    border-color: var(--sl-color-accent);
+    background: color-mix(in srgb, var(--sl-color-accent) 8%, var(--sl-color-gray-6));
+  }
+
+  .ecsx-compare__arrow {
+    align-self: center;
+    font-size: 1.75rem;
+    color: var(--sl-color-accent);
+  }
+
+  .ecsx-compare__title {
+    margin: 0 0 0.6rem;
+    font-size: var(--sl-text-base);
+  }
+
+  .ecsx-chiplist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .ecsx-chiplist li {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: var(--sl-text-sm);
+  }
+
+  .ecsx-compare__note {
+    margin: 0.75rem 0 0;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  /* --- Personas --- */
+  .ecsx-personas {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 0.75rem;
+  }
+
+  .ecsx-persona {
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-persona__head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+  }
+
+  .ecsx-persona ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: var(--sl-text-sm);
+  }
+
+  .ecsx-microcopy {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  /* --- Paths --- */
+  .ecsx-paths {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.75rem;
+  }
+
+  .ecsx-path {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 1.25rem 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+
+  .ecsx-path:hover {
+    border-color: var(--sl-color-accent);
+    transform: translateY(-2px);
+  }
+
+  .ecsx-path__title {
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-path__sub {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+  }
+
+  @media (max-width: 36rem) {
+    .ecsx-arrow,
+    .ecsx-compare__arrow {
+      transform: rotate(90deg);
+    }
+    .ecsx-arrow--branch {
+      transform: rotate(90deg);
+    }
+  }
+`}</style>

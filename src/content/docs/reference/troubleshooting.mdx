@@ -1,0 +1,38 @@
+---
+title: Troubleshooting
+description: Common ECS Gateway lab failures — assume role, AZ coverage, route status, and teardown blockers.
+---
+
+## create-gateway cannot assume the infrastructure role
+
+IAM is eventually consistent. Wait about a minute after creating the role and retry. Confirm the trust principal is `ecs.amazonaws.com` and the managed policy is attached. Confirm your caller can `iam:PassRole` on that role.
+
+## Service deploys but no route / CREATE_FAILED
+
+- Cluster association must be `ACTIVE` before you create the service with a connector.
+- Service subnets must be in the **same VPC** as the gateway subnets.
+- Gateway must cover **every** AZ the service uses.
+- Task definition must use `awsvpc` and a named port that matches `portName`.
+- `filters.accessTypes` must include `PUBLIC` for an internet-facing gateway (or omit the filter).
+
+## Hostname does not respond
+
+- Route status must be `ACTIVE` (not `CREATE_IN_PROGRESS`).
+- Target health: tasks need security group rules that allow the ALB (ECS manages the service SG when using a gateway).
+- Health check path must return success (this lab uses `/`; Orders and Catalog each return HTML).
+
+## Task stops: `failed to validate logger args` / `logs:CreateLogGroup`
+
+`AmazonECSTaskExecutionRolePolicy` cannot create log groups. Pre-create `/ecs/${PATH_NAME}` (see the path’s services page) and omit `awslogs-create-group` from the task definition. A `503` from the service URL usually means tasks are still crashing or not healthy yet.
+
+## Cannot delete gateway
+
+1. Disable deletion protection (role + empty config required):
+   `aws ecs update-gateway --gateway ... --infrastructure-role-arn "$GATEWAY_INFRA_ROLE_ARN" --no-deletion-protection --configuration '{"hostSharedAlb":{}}'`
+2. Delete or disconnect services so routes clear
+3. Disassociate from clusters; wait until associations list is empty
+4. Then `delete-gateway`
+
+## Cannot delete VPC
+
+Wait for ENI count in the VPC to reach zero (ALB and tasks). Do not strip `AmazonECSManaged=true` tags from managed resources while ECS still owns them.
