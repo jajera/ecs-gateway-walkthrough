@@ -1,0 +1,191 @@
+---
+title: EC2 overview
+description: High-level architecture for the EC2 path — public ALB subnets, private task and instance subnets, path-owned cluster and gateway.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+This path runs ECS services on **EC2** launch type behind an ECS Gateway. It uses the shared VPC and IAM roles from [Setup](/setup/prerequisites/), then builds everything else for this path alone.
+
+You deploy the same two demo apps as the Fargate path — **Orders** (service `-a`) and **Catalog** (service `-b`) — so each managed hostname clearly shows which service the shared ALB routed to. The difference here is compute: tasks run on an ECS-optimized **EC2 instance** you manage, not on Fargate.
+
+## Architecture (high level)
+
+<figure class="ecsx-arch not-content" aria-label="Inbound HTTPS from the internet reaches the gateway ALB in the public subnets, which routes to two awsvpc services — Orders and Catalog — running on an ECS-optimized EC2 instance in the private subnets. Services reach the internet outbound through a NAT gateway.">
+  <div class="ecsx-arch__edge">
+    <span class="ecsx-arch__pill">🌐 Internet</span>
+  </div>
+  <span class="ecsx-arch__arrow ecsx-arch__arrow--in" aria-hidden="true">▼ HTTPS 443</span>
+
+<div class="ecsx-arch__tier ecsx-arch__tier--public">
+  <span class="ecsx-arch__tier-tag">Public subnets</span>
+  <div class="ecsx-arch__box ecsx-arch__box--accent">
+    <img src={icon("icons/resource/networking/Res_Elastic-Load-Balancing_Application-Load-Balancer_48.svg")} alt="" aria-hidden="true" width="34" height="34" loading="lazy" />
+    <span class="ecsx-arch__box-title">ECS Gateway ALB</span>
+    <span class="ecsx-arch__box-sub">HTTPS · host-based routing</span>
+  </div>
+</div>
+
+<span class="ecsx-arch__arrow" aria-hidden="true">
+  ▼
+</span>
+
+<div class="ecsx-arch__tier ecsx-arch__tier--private">
+  <span class="ecsx-arch__tier-tag">Private subnets</span>
+  <div class="ecsx-arch__services">
+    <div class="ecsx-arch__box">
+      <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Service_48.svg")} alt="" aria-hidden="true" width="30" height="30" loading="lazy" />
+      <span class="ecsx-arch__box-title">Orders</span>
+      <span class="ecsx-arch__box-sub">
+        service <code>-a</code> · awsvpc task
+      </span>
+    </div>
+    <div class="ecsx-arch__box">
+      <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Service_48.svg")} alt="" aria-hidden="true" width="30" height="30" loading="lazy" />
+      <span class="ecsx-arch__box-title">Catalog</span>
+      <span class="ecsx-arch__box-sub">
+        service <code>-b</code> · awsvpc task
+      </span>
+    </div>
+  </div>
+  <div class="ecsx-arch__box ecsx-arch__box--wide">
+    <img src={icon("icons/resource/compute/Res_Amazon-EC2_Instance_48.svg")} alt="" aria-hidden="true" width="30" height="30" loading="lazy" />
+    <span class="ecsx-arch__box-title">ECS-optimized EC2 instance</span>
+    <span class="ecsx-arch__box-sub">capacity for the tasks above</span>
+  </div>
+</div>
+
+<span class="ecsx-arch__arrow" aria-hidden="true">
+  ▼ outbound only
+</span>
+
+  <div class="ecsx-arch__edge">
+    <span class="ecsx-arch__pill">
+      <img src={icon("icons/resource/networking/Res_Amazon-VPC_NAT-Gateway_48.svg")} alt="" aria-hidden="true" width="20" height="20" />
+      NAT gateway → Internet
+    </span>
+  </div>
+</figure>
+
+| Piece                                                                     | Who owns it               |
+| ------------------------------------------------------------------------- | ------------------------- |
+| VPC, public/private subnets, NAT, gateway infra role, task execution role | Shared setup              |
+| Cluster, gateway, EC2 instance, services                                  | This path (`${NAME}-ec2`) |
+
+Platform creates the gateway on the **public** subnets and associates the cluster. Application services only add a **gateway connector** and place tasks in the **private** subnets. ECS provisions the ALB, certificates, hostnames, and target groups.
+
+The container instance is capacity only and also runs in a private subnet. Tasks use **`awsvpc`** (required by Gateway).
+
+<Aside type="tip">The Fargate path is the same ingress layout without an instance — same connector, different compute. Paths do not share a gateway.</Aside>
+
+## Next
+
+[EC2 capacity](/ec2/capacity/)
+
+<style>{`
+  .ecsx-arch {
+    margin-block: 1.5rem;
+    padding: 1.25rem 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-black);
+  }
+
+  .ecsx-arch__edge {
+    display: flex;
+    justify-content: center;
+  }
+
+  .ecsx-arch__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    border: 1px dashed var(--sl-color-gray-4);
+    border-radius: 0.4rem;
+    background: var(--sl-color-gray-6);
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-arch__arrow {
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--sl-color-accent);
+  }
+
+  .ecsx-arch__arrow--in {
+    color: #3fb950;
+  }
+
+  .ecsx-arch__tier {
+    width: 100%;
+    max-width: 34rem;
+    padding: 0.9rem;
+    border: 1px dashed var(--sl-color-gray-4);
+    border-radius: 0.6rem;
+    background: color-mix(in srgb, var(--sl-color-white) 2%, transparent);
+  }
+
+  .ecsx-arch__tier--public {
+    border-left: 3px solid var(--sl-color-accent);
+  }
+
+  .ecsx-arch__tier--private {
+    border-left: 3px solid var(--sl-color-gray-3);
+  }
+
+  .ecsx-arch__tier-tag {
+    display: block;
+    margin-bottom: 0.6rem;
+    font-size: var(--sl-text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-arch__box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+  }
+
+  .ecsx-arch__box--accent {
+    border-color: var(--sl-color-accent);
+  }
+
+  .ecsx-arch__box--wide {
+    margin-top: 0.5rem;
+  }
+
+  .ecsx-arch__box-title {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-arch__box-sub {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-arch__services {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: 0.5rem;
+  }
+`}</style>

@@ -1,0 +1,644 @@
+---
+title: What is ECS Gateway?
+description: Account-level managed ingress for ECS services — shared ALBs, host-based routing, and per-service HTTPS URLs.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+Amazon ECS Gateway is an **account-level** resource that holds ingress configuration and
+security standards. You associate it with clusters; services opt in with a
+
+<Tooltip term="gateway-connector" label="gateway connector" />. ECS then provisions and manages the load balancer path in your account.
+
+<Aside type="note">Creating a gateway provisions **nothing**. The first Application Load Balancer appears when the first compatible service connects.</Aside>
+
+## How we got here
+
+ECS Gateway doesn't replace anything — it's a shortcut for ingress plumbing teams already set up by
+hand. Here's what changes.
+
+<div class="ecsx-story not-content">
+  <article class="ecsx-era ecsx-era--before">
+    <span class="ecsx-era__badge">Traditional</span>
+
+    <div class="ecsx-mini" aria-label="Each service gets its own load balancer and certificate, duplicated per service.">
+      <div class="ecsx-mini__row">
+        <div class="ecsx-chip ecsx-chip--self">
+          <img src={icon("icons/resource/networking/Res_Elastic-Load-Balancing_Application-Load-Balancer_48.svg")} alt="ALB" width="26" height="26" loading="lazy" />
+          <img src={icon("icons/service/security/Arch_AWS-Certificate-Manager_64.svg")} alt="ACM certificate" width="26" height="26" loading="lazy" />
+        </div>
+        <span class="ecsx-mini__arrow" aria-hidden="true">→</span>
+        <div class="ecsx-box">
+          <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Service_48.svg")} alt="" aria-hidden="true" width="26" height="26" loading="lazy" />
+          <span>Service A</span>
+        </div>
+      </div>
+      <div class="ecsx-mini__row">
+        <div class="ecsx-chip ecsx-chip--self">
+          <img src={icon("icons/resource/networking/Res_Elastic-Load-Balancing_Application-Load-Balancer_48.svg")} alt="ALB" width="26" height="26" loading="lazy" />
+          <img src={icon("icons/service/security/Arch_AWS-Certificate-Manager_64.svg")} alt="ACM certificate" width="26" height="26" loading="lazy" />
+        </div>
+        <span class="ecsx-mini__arrow" aria-hidden="true">→</span>
+        <div class="ecsx-box">
+          <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Service_48.svg")} alt="" aria-hidden="true" width="26" height="26" loading="lazy" />
+          <span>Service B</span>
+        </div>
+      </div>
+      <span class="ecsx-mini__note">One ALB + cert per service — yours to build and sync.</span>
+    </div>
+
+    <p>
+      Every new service meant standing up its own ALB, certificate, listener rules, target group,
+      and security groups — then keeping all of it in sync. Teams often shared one ALB across
+      services to cut the sprawl, but the host rules, certs, and drift were still yours to babysit.
+    </p>
+
+  </article>
+
+<span class="ecsx-story__arrow" aria-hidden="true">
+  →
+</span>
+
+  <article class="ecsx-era ecsx-era--now">
+    <span class="ecsx-era__badge">With a gateway</span>
+
+    <div class="ecsx-mini" aria-label="One shared, gateway-managed load balancer and certificate routes to every service.">
+      <div class="ecsx-mini__row">
+        <div class="ecsx-chip ecsx-chip--gateway">
+          <img src={icon("icons/resource/networking/Res_Elastic-Load-Balancing_Application-Load-Balancer_48.svg")} alt="Shared ALB" width="26" height="26" loading="lazy" />
+          <img src={icon("icons/service/security/Arch_AWS-Certificate-Manager_64.svg")} alt="ACM certificate" width="26" height="26" loading="lazy" />
+          <span class="ecsx-chip__tag">managed</span>
+        </div>
+        <span class="ecsx-mini__arrow" aria-hidden="true">→</span>
+        <div class="ecsx-mini__stack">
+          <div class="ecsx-box">
+            <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Service_48.svg")} alt="" aria-hidden="true" width="26" height="26" loading="lazy" />
+            <span>Service A</span>
+          </div>
+          <div class="ecsx-box">
+            <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Service_48.svg")} alt="" aria-hidden="true" width="26" height="26" loading="lazy" />
+            <span>Service B</span>
+          </div>
+        </div>
+      </div>
+      <span class="ecsx-mini__note">One shared ALB + cert — ECS builds and maintains it.</span>
+    </div>
+
+    <p>
+      The platform sets the ingress and security standards once. A team ships a service with a{" "}
+      <Tooltip term="gateway-connector" label="gateway connector" /> and ECS builds and maintains the
+      rest — shared ALB, cert, hostname, routing rule, target group, security groups — no load
+      balancer permissions required on their side.
+    </p>
+
+  </article>
+</div>
+
+<Aside type="note">
+  ECS Gateway handles traffic coming *into* your services. It sits alongside **ECS Service Connect**, which wires services *to each other* — related tooling, not a replacement.
+</Aside>
+
+### Is it the right fit?
+
+<div class="ecsx-gate not-content">
+  <span class="ecsx-gate__q">Does the service serve inbound HTTP(S)?</span>
+  <div class="ecsx-gate__paths">
+    <div class="ecsx-gate__branch ecsx-gate__branch--no">
+      <span class="ecsx-gate__verdict">No → skip the gateway</span>
+      <span class="ecsx-gate__ex">Batch, ETL, queue / stream consumers. Nothing to route — give them outbound access via NAT instead.</span>
+    </div>
+    <div class="ecsx-gate__branch ecsx-gate__branch--yes">
+      <span class="ecsx-gate__verdict">Yes → read on</span>
+      <span class="ecsx-gate__ex">Web apps and APIs that answer requests on a listening container port.</span>
+    </div>
+  </div>
+</div>
+
+<div class="ecsx-fit not-content">
+  <div class="ecsx-fit__col ecsx-fit__col--use">
+    <h4>Use a gateway</h4>
+    <ul>
+      <li>A fleet of services needing public HTTPS</li>
+      <li>Platform should own LB, certs, and routing</li>
+      <li>Happy with host-based routing on HTTPS 443</li>
+      <li>
+        Managed <code>*.ecs.&lt;region&gt;.on.aws</code> hostname is fine
+      </li>
+      <li>
+        Tasks use <Tooltip term="awsvpc" label="awsvpc" /> networking
+      </li>
+    </ul>
+  </div>
+  <div class="ecsx-fit__col ecsx-fit__col--diy">
+    <h4>Wire an ALB yourself</h4>
+    <ul>
+      <li>Need path-based routing or non-443 ports</li>
+      <li>Need a custom domain on the load balancer</li>
+      <li>Want hands-on control of ALB, WAF, listeners</li>
+      <li>Just one service — manual is faster</li>
+    </ul>
+  </div>
+</div>
+
+## What a connected service creates
+
+Each <Tooltip term="gateway-route" label="gateway route" /> is one service connected to one
+gateway. Shared resources are reused across services on the same gateway; per-route resources are
+created once per service.
+
+<div class="ecsx-provision not-content">
+  <section class="ecsx-group ecsx-group--shared">
+    <header>
+      <span class="ecsx-group__tag">Shared per gateway</span>
+      <span class="ecsx-group__hint">reused · up to 25 services per ALB</span>
+    </header>
+    <div class="ecsx-tiles">
+      <div class="ecsx-tile">
+        <img src={icon("icons/resource/networking/Res_Elastic-Load-Balancing_Application-Load-Balancer_48.svg")} alt="Application Load Balancer" width="40" height="40" loading="lazy" />
+        <span>Application Load Balancer</span>
+      </div>
+      <div class="ecsx-tile">
+        <span class="ecsx-tile__emoji" aria-hidden="true">🎧</span>
+        <span>HTTPS listener (443)</span>
+      </div>
+      <div class="ecsx-tile">
+        <span class="ecsx-tile__emoji" aria-hidden="true">🛡️</span>
+        <span>ALB security group</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="ecsx-group ecsx-group--route">
+    <header>
+      <span class="ecsx-group__tag">Per connected service</span>
+      <span class="ecsx-group__hint">one set per gateway route</span>
+    </header>
+    <div class="ecsx-tiles">
+      <div class="ecsx-tile">
+        <img src={icon("icons/service/security/Arch_AWS-Certificate-Manager_64.svg")} alt="AWS Certificate Manager" width="40" height="40" loading="lazy" />
+        <span>ACM certificate</span>
+      </div>
+      <div class="ecsx-tile">
+        <span class="ecsx-tile__emoji" aria-hidden="true">🔒</span>
+        <span>Managed HTTPS hostname<br /><code>&lt;id&gt;.ecs.&lt;region&gt;.on.aws</code></span>
+      </div>
+      <div class="ecsx-tile">
+        <span class="ecsx-tile__emoji" aria-hidden="true">🧭</span>
+        <span>Listener rule (host-based)</span>
+      </div>
+      <div class="ecsx-tile">
+        <span class="ecsx-tile__emoji" aria-hidden="true">🎯</span>
+        <span>Target group</span>
+      </div>
+      <div class="ecsx-tile">
+        <span class="ecsx-tile__emoji" aria-hidden="true">🛡️</span>
+        <span>Service security group<br /><small>inbound from ALB only</small></span>
+      </div>
+    </div>
+  </section>
+</div>
+
+<Aside type="tip">When a gateway hits 25 services on one ALB, ECS adds another ALB — up to `maxAlbCount`.</Aside>
+
+## Modes and constraints
+
+<div class="ecsx-specs not-content">
+  <div class="ecsx-spec">
+    <span class="ecsx-spec__key">Config type</span>
+    <span class="ecsx-spec__val">
+      <Tooltip term="host-shared-alb" label="hostSharedAlb" />
+    </span>
+  </div>
+  <div class="ecsx-spec">
+    <span class="ecsx-spec__key">Listener</span>
+    <span class="ecsx-spec__val">HTTPS · port 443 only</span>
+  </div>
+  <div class="ecsx-spec">
+    <span class="ecsx-spec__key">Network mode</span>
+    <span class="ecsx-spec__val">
+      <Tooltip term="awsvpc" label="awsvpc" /> (Fargate, EC2, Managed Instances)
+    </span>
+  </div>
+  <div class="ecsx-spec">
+    <span class="ecsx-spec__key">Scheme</span>
+    <span class="ecsx-spec__val">internet-facing (PUBLIC) — this lab</span>
+  </div>
+</div>
+
+## Who owns what
+
+<div class="ecsx-personas not-content">
+  <div class="ecsx-persona">
+    <div class="ecsx-persona__head">
+      <img src={icon("icons/service/security/Arch_AWS-Identity-and-Access-Management_64.svg")} alt="Platform" width="40" height="40" loading="lazy" />
+      <span>Platform</span>
+    </div>
+    <ul>
+      <li>Gateway + cluster associations</li>
+      <li>Subnets, scheme, optional WAF</li>
+      <li><Tooltip term="infrastructure-role" label="Infrastructure role" /></li>
+    </ul>
+  </div>
+
+  <div class="ecsx-persona">
+    <div class="ecsx-persona__head">
+      <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Task_48.svg")} alt="Application" width="40" height="40" loading="lazy" />
+      <span>Application</span>
+    </div>
+    <ul>
+      <li>Task definition + service</li>
+      <li>Gateway connector (<code>portName</code>, filters, health check)</li>
+      <li>No permission to create load balancers needed</li>
+    </ul>
+  </div>
+</div>
+
+<p class="ecsx-microcopy">
+  Application teams never touch load balancer permissions — those live on the
+  <Tooltip term="infrastructure-role" label="infrastructure role" /> that ECS assumes on their behalf.
+</p>
+
+## Next
+
+See [Platform versus application](/architecture/platform-vs-app/) for how a deployment chooses
+compatible gateways, then start the lab at [Prerequisites](/setup/prerequisites/).
+
+<style>{`
+  .ecsx-provision {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.75rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-group {
+    padding: 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-group--route {
+    border-color: var(--sl-color-accent);
+    background: color-mix(in srgb, var(--sl-color-accent) 7%, var(--sl-color-gray-6));
+  }
+
+  .ecsx-group header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.35rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .ecsx-group__tag {
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-group__hint {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-tiles {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ecsx-tile {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.45rem;
+    background: var(--sl-color-black);
+    font-size: var(--sl-text-sm);
+    line-height: 1.35;
+  }
+
+  .ecsx-tile > img {
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .ecsx-tile > span:last-child {
+    flex: 1 1 auto;
+    text-align: left;
+  }
+
+  .ecsx-tile code {
+    font-size: var(--sl-text-xs);
+  }
+
+  .ecsx-tile small {
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-tile__emoji {
+    font-size: 1.6rem;
+    width: 40px;
+    text-align: center;
+    flex: 0 0 40px !important;
+  }
+
+  /* --- Specs --- */
+  .ecsx-specs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    gap: 0.5rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-spec {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-left: 3px solid var(--sl-color-accent);
+    border-radius: 0.45rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-spec__key {
+    font-size: var(--sl-text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-spec__val {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  /* --- Personas (shared vocabulary with landing page) --- */
+  .ecsx-personas {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 0.75rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-persona {
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-persona__head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+  }
+
+  .ecsx-persona ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: var(--sl-text-sm);
+  }
+
+  .ecsx-microcopy {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  /* --- Story (before / now) --- */
+  .ecsx-story {
+    display: flex;
+    align-items: stretch;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-era {
+    flex: 1 1 18rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-era--now {
+    border-color: var(--sl-color-accent);
+    background: color-mix(in srgb, var(--sl-color-accent) 8%, var(--sl-color-gray-6));
+  }
+
+  .ecsx-era__badge {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border-radius: 0.3rem;
+    font-size: var(--sl-text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: var(--sl-color-gray-5);
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-era--now .ecsx-era__badge {
+    background: var(--sl-color-accent);
+    color: var(--sl-color-black);
+  }
+
+  .ecsx-era p {
+    margin: 0.75rem 0 0;
+    font-size: var(--sl-text-sm);
+  }
+
+  .ecsx-story__arrow {
+    align-self: center;
+    font-size: 1.75rem;
+    color: var(--sl-color-accent);
+  }
+
+  /* --- Mini diagrams inside the era cards --- */
+  .ecsx-mini {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.85rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-black);
+  }
+
+  .ecsx-mini__row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .ecsx-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.35rem 0.45rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.4rem;
+    background: var(--sl-color-gray-6);
+    flex: 0 0 auto;
+  }
+
+  .ecsx-chip--self {
+    border-style: dashed;
+    border-color: var(--sl-color-gray-4);
+  }
+
+  .ecsx-chip--gateway {
+    border-color: var(--sl-color-accent);
+    background: color-mix(in srgb, var(--sl-color-accent) 12%, var(--sl-color-gray-6));
+  }
+
+  .ecsx-chip__tag {
+    margin-left: 0.1rem;
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+    color: var(--sl-color-accent);
+  }
+
+  .ecsx-mini__arrow {
+    color: var(--sl-color-accent);
+    font-size: 1.2rem;
+    flex: 0 0 auto;
+  }
+
+  .ecsx-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.55rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.4rem;
+    background: var(--sl-color-gray-6);
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-mini__stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .ecsx-mini__note {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  /* --- Fit gate (inbound HTTP check) --- */
+  .ecsx-gate {
+    margin-block: 1.25rem;
+    padding: 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-black);
+  }
+
+  .ecsx-gate__q {
+    display: block;
+    text-align: center;
+    margin-bottom: 0.75rem;
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-gate__paths {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 0.6rem;
+  }
+
+  .ecsx-gate__branch {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem 0.9rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--sl-color-gray-5);
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-gate__branch--yes {
+    border-left: 3px solid #3fb950;
+  }
+
+  .ecsx-gate__branch--no {
+    border-left: 3px solid #d29922;
+  }
+
+  .ecsx-gate__verdict {
+    font-size: var(--sl-text-sm);
+    font-weight: 700;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-gate__ex {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  /* --- Fit vs DIY --- */
+  .ecsx-fit {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.75rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-fit__col {
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-fit__col--use {
+    border-top: 3px solid var(--sl-color-accent);
+  }
+
+  .ecsx-fit__col--diy {
+    border-top: 3px solid var(--sl-color-gray-3);
+  }
+
+  .ecsx-fit__col h4 {
+    margin: 0 0 0.5rem;
+    font-size: var(--sl-text-base);
+  }
+
+  .ecsx-fit__col ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-1, var(--sl-color-white));
+  }
+
+  @media (max-width: 36rem) {
+    .ecsx-story__arrow {
+      transform: rotate(90deg);
+    }
+  }
+`}</style>

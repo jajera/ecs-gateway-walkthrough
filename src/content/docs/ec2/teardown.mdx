@@ -1,0 +1,674 @@
+---
+title: EC2 teardown
+description: Delete EC2-path services, gateway, instance, and optionally the shared VPC (including NAT) and IAM roles.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Tear down in reverse: remove the services (routes drain, ALB deprovisions), then the gateway, then the instance and cluster, then the EC2 instance IAM. The shared VPC and IAM roles come last — and only if you are finished with **both** paths.
+
+<div class="ecsx-teardown not-content" aria-label="EC2 teardown order: services, gateway, instance and cluster, instance IAM, then optionally the shared VPC and IAM roles.">
+  <div class="ecsx-td">
+    <span class="ecsx-td__n">1</span>
+    <span class="ecsx-td__title">Services</span>
+    <span class="ecsx-td__sub">routes drain · ALB deprovisions</span>
+  </div>
+  <span class="ecsx-td__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-td">
+    <span class="ecsx-td__n">2</span>
+    <span class="ecsx-td__title">Gateway</span>
+    <span class="ecsx-td__sub">protection off · disassociate · delete</span>
+  </div>
+  <span class="ecsx-td__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-td">
+    <span class="ecsx-td__n">3</span>
+    <span class="ecsx-td__title">Instance + cluster</span>
+    <span class="ecsx-td__sub">terminate · task defs · logs · SG</span>
+  </div>
+  <span class="ecsx-td__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-td">
+    <span class="ecsx-td__n">4</span>
+    <span class="ecsx-td__title">Instance IAM</span>
+    <span class="ecsx-td__sub">profile + role</span>
+  </div>
+  <span class="ecsx-td__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-td ecsx-td--shared">
+    <span class="ecsx-td__n">5</span>
+    <span class="ecsx-td__title">Shared VPC + IAM</span>
+    <span class="ecsx-td__sub">only when both paths are done</span>
+  </div>
+</div>
+
+<Aside type="caution">
+  Steps 1–4 are **EC2-path only**. Do **not** run the "Shared VPC and roles" section if you still plan to run (or keep) the [Fargate path](/fargate/overview/) — the VPC, NAT, and IAM roles are shared
+  by both.
+</Aside>
+
+<Aside type="note">Each step shows one command with sample output directly below it. Sample outputs use the lab name `ecs-gw-lab-ec2`; ARNs and account IDs are redacted or omitted.</Aside>
+
+## Path variables
+
+Confirm `$INSTANCE_ID` and `$EC2_SG_ID` from [EC2 capacity](/ec2/capacity/) are still set.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+export PATH_NAME="${NAME}-ec2"
+export CLUSTER="$PATH_NAME"
+export GATEWAY="$PATH_NAME"
+echo "path ready: CLUSTER=$CLUSTER GATEWAY=$GATEWAY INSTANCE_ID=${INSTANCE_ID:+set}"
+```
+
+```text
+path ready: CLUSTER=ecs-gw-lab-ec2 GATEWAY=ecs-gw-lab-ec2 INSTANCE_ID=set
+```
+
+</div>
+
+## Scale services to zero
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs update-service --cluster "$CLUSTER" --service "${PATH_NAME}-a" \
+  --desired-count 0 \
+  --query 'service.{name:serviceName,desired:desiredCount,status:status}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-ec2-a",
+    "desired": 0,
+    "status": "ACTIVE"
+}
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs update-service --cluster "$CLUSTER" --service "${PATH_NAME}-b" \
+  --desired-count 0 \
+  --query 'service.{name:serviceName,desired:desiredCount,status:status}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-ec2-b",
+    "desired": 0,
+    "status": "ACTIVE"
+}
+```
+
+</div>
+
+## Delete services
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs delete-service --cluster "$CLUSTER" --service "${PATH_NAME}-a" --force \
+  --query 'service.{name:serviceName,status:status}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-ec2-a",
+    "status": "DRAINING"
+}
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs delete-service --cluster "$CLUSTER" --service "${PATH_NAME}-b" --force \
+  --query 'service.{name:serviceName,status:status}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-ec2-b",
+    "status": "DRAINING"
+}
+```
+
+</div>
+
+## Wait for routes to clear
+
+Routes (and the shared ALB) go away after the services disconnect. This often takes several minutes.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+for i in $(seq 1 60); do
+  COUNT=$(aws ecs list-gateway-routes --gateway "$GATEWAY" --cluster "$CLUSTER" \
+    --query 'length(gatewayRoutes)' --output text 2>/dev/null || echo 0)
+  echo "routes: $COUNT"
+  [ "$COUNT" = "0" ] && break
+  sleep 15
+done
+```
+
+```text
+routes: 2
+routes: 1
+routes: 0
+```
+
+</div>
+
+## Disable deletion protection
+
+`update-gateway` requires the infrastructure role ARN and a `configuration` object. For a protection-only change, pass an empty `hostSharedAlb`.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs update-gateway --gateway "$GATEWAY" \
+  --infrastructure-role-arn "$GATEWAY_INFRA_ROLE_ARN" \
+  --no-deletion-protection \
+  --configuration '{"hostSharedAlb":{}}' \
+  --query 'gateway.{name:name,deletionProtection:deletionProtection}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-ec2",
+    "deletionProtection": false
+}
+```
+
+</div>
+
+Wait until the gateway leaves `UPDATE_IN_PROGRESS` before deleting:
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+for i in $(seq 1 36); do
+  STATUS=$(aws ecs describe-gateway --gateway "$GATEWAY" \
+    --query 'gateway.status' --output text)
+  echo "$i: $STATUS"
+  [ "$STATUS" = "UPDATE_COMPLETE" ] && break
+  sleep 10
+done
+```
+
+```text
+1: UPDATE_IN_PROGRESS
+2: UPDATE_COMPLETE
+```
+
+</div>
+
+## Disassociate gateway from cluster
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs disassociate-gateway-from-cluster \
+  --gateway "$GATEWAY" \
+  --cluster "$CLUSTER" >/dev/null
+```
+
+```text
+(no stdout — success is silent)
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+for i in $(seq 1 36); do
+  ASSOC=$(aws ecs list-gateway-cluster-associations --gateway "$GATEWAY" \
+    --query 'length(gatewayClusterAssociations)' --output text 2>/dev/null || echo 0)
+  echo "associations: $ASSOC"
+  [ "$ASSOC" = "0" ] && break
+  sleep 10
+done
+```
+
+```text
+associations: 1
+associations: 0
+```
+
+</div>
+
+## Delete gateway
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs delete-gateway --gateway "$GATEWAY" \
+  --query '{name:name,status:status}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-ec2",
+    "status": "DELETED"
+}
+```
+
+</div>
+
+## Terminate instance
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" \
+  --query 'TerminatingInstances[0].CurrentState.Name' --output text
+```
+
+```text
+shutting-down
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
+echo "instance terminated"
+```
+
+```text
+instance terminated
+```
+
+</div>
+
+## Delete cluster
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs delete-cluster --cluster "$CLUSTER" \
+  --query 'cluster.{name:clusterName,status:status}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-ec2",
+    "status": "INACTIVE"
+}
+```
+
+</div>
+
+## Deregister task definitions
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs list-task-definitions --family-prefix "$PATH_NAME" \
+  --query 'length(taskDefinitionArns)' --output text
+```
+
+```text
+2
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs list-task-definitions --family-prefix "$PATH_NAME" --query 'taskDefinitionArns[]' \
+  --output text | tr '\t' '\n' | while read -r ARN; do
+  [ -n "$ARN" ] && aws ecs deregister-task-definition --task-definition "$ARN" >/dev/null
+done
+echo "deregistered"
+```
+
+```text
+deregistered
+```
+
+</div>
+
+## Delete log group and instance security group
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws logs delete-log-group --log-group-name "/ecs/${PATH_NAME}" || true
+echo "log group gone (or already missing)"
+```
+
+```text
+log group gone (or already missing)
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 delete-security-group --group-id "$EC2_SG_ID" || true
+echo "instance security group deleted"
+```
+
+```text
+instance security group deleted
+```
+
+</div>
+
+## EC2 instance IAM
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws iam remove-role-from-instance-profile \
+  --instance-profile-name "${NAME}-ec2" --role-name "${NAME}-ec2" || true
+aws iam delete-instance-profile --instance-profile-name "${NAME}-ec2" || true
+echo "instance profile removed"
+```
+
+```text
+instance profile removed
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws iam detach-role-policy \
+  --role-name "${NAME}-ec2" \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role || true
+aws iam delete-role --role-name "${NAME}-ec2" || true
+echo "instance role removed"
+```
+
+```text
+instance role removed
+```
+
+</div>
+
+EC2-path resources are removed. Stop here if you still want the shared VPC for the [Fargate path](/fargate/overview/).
+
+## Shared VPC and roles
+
+Skip this section if you still plan to run (or keep) the [Fargate path](/fargate/gateway/).
+
+### Shared IAM roles
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws iam detach-role-policy \
+  --role-name "${NAME}-gateway-infra" \
+  --policy-arn arn:aws:iam::aws:policy/AmazonECSInfrastructureRoleForGatewayHostSharedALB || true
+aws iam delete-role --role-name "${NAME}-gateway-infra" || true
+echo "gateway infra role removed"
+```
+
+```text
+gateway infra role removed
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws iam detach-role-policy \
+  --role-name "${NAME}-exec" \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy || true
+aws iam delete-role --role-name "${NAME}-exec" || true
+echo "exec role removed"
+```
+
+```text
+exec role removed
+```
+
+</div>
+
+### Wait for ENIs
+
+ALB / task / instance ENIs must clear before the VPC can delete.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+for i in $(seq 1 36); do
+  COUNT=$(aws ec2 describe-network-interfaces \
+    --filters "Name=vpc-id,Values=${VPC_ID}" \
+    --query 'length(NetworkInterfaces)' --output text)
+  echo "ENIs: $COUNT"
+  [ "$COUNT" = "0" ] && break
+  sleep 10
+done
+```
+
+```text
+ENIs: 3
+ENIs: 1
+ENIs: 0
+```
+
+</div>
+
+### NAT, routes, subnets, VPC
+
+IDs stay in shell variables — do not echo full resource ARNs into tickets.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 delete-nat-gateway --nat-gateway-id "$NAT_GW_ID" \
+  --query 'NatGatewayId' --output text
+```
+
+```text
+nat-<id>
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 wait nat-gateway-deleted --nat-gateway-ids "$NAT_GW_ID"
+echo "NAT deleted"
+```
+
+```text
+NAT deleted
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 release-address --allocation-id "$EIP_ALLOC_ID"
+echo "EIP released"
+```
+
+```text
+EIP released
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+for RTB in "$PRIVATE_RTB_ID" "$PUBLIC_RTB_ID"; do
+  for ASSOC_ID in $(aws ec2 describe-route-tables --route-table-ids "$RTB" \
+    --query 'RouteTables[0].Associations[?SubnetId!=`null`].RouteTableAssociationId' \
+    --output text); do
+    aws ec2 disassociate-route-table --association-id "$ASSOC_ID"
+  done
+done
+echo "subnet route associations cleared"
+```
+
+```text
+subnet route associations cleared
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 delete-route --route-table-id "$PRIVATE_RTB_ID" --destination-cidr-block 0.0.0.0/0 || true
+aws ec2 delete-route-table --route-table-id "$PRIVATE_RTB_ID"
+aws ec2 delete-route --route-table-id "$PUBLIC_RTB_ID" --destination-cidr-block 0.0.0.0/0 || true
+aws ec2 delete-route-table --route-table-id "$PUBLIC_RTB_ID"
+echo "route tables deleted"
+```
+
+```text
+route tables deleted
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID"
+aws ec2 delete-internet-gateway --internet-gateway-id "$IGW_ID"
+echo "IGW deleted"
+```
+
+```text
+IGW deleted
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 delete-subnet --subnet-id "$PRIVATE_SUBNET_A"
+aws ec2 delete-subnet --subnet-id "$PRIVATE_SUBNET_B"
+aws ec2 delete-subnet --subnet-id "$PUBLIC_SUBNET_A"
+aws ec2 delete-subnet --subnet-id "$PUBLIC_SUBNET_B"
+echo "subnets deleted"
+```
+
+```text
+subnets deleted
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 delete-vpc --vpc-id "$VPC_ID"
+echo "VPC deleted"
+```
+
+```text
+VPC deleted
+```
+
+</div>
+
+<Aside type="caution">If `delete-vpc` fails, wait for ENIs (ALB/tasks/instance) and the NAT gateway to clear. Do not strip `AmazonECSManaged=true` tags while ECS still owns resources.</Aside>
+
+<style>{`
+  .ecsx-teardown {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0.5rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-td {
+    position: relative;
+    flex: 1 1 9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 1.1rem 0.9rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-td--shared {
+    border-style: dashed;
+    border-color: #d29922;
+  }
+
+  .ecsx-td__n {
+    position: absolute;
+    top: -0.7rem;
+    left: 0.9rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--sl-color-accent);
+    color: var(--sl-color-black);
+    font-size: var(--sl-text-xs);
+    font-weight: 800;
+  }
+
+  .ecsx-td--shared .ecsx-td__n {
+    background: #d29922;
+  }
+
+  .ecsx-td__title {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-td__sub {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-td__arrow {
+    align-self: center;
+    font-size: 1.4rem;
+    color: var(--sl-color-accent);
+    flex: 0 0 auto;
+  }
+
+  .ecsx-cli {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-block: 1rem;
+  }
+
+  .ecsx-cli > * {
+    margin-block: 0 !important;
+  }
+
+  @media (max-width: 36rem) {
+    .ecsx-td__arrow {
+      transform: rotate(90deg);
+    }
+  }
+`}</style>

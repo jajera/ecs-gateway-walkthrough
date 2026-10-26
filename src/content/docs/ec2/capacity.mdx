@@ -1,0 +1,415 @@
+---
+title: EC2 capacity
+description: Create the EC2 instance role and launch an ECS-optimized instance for the EC2 path.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+Path-owned compute for `${NAME}-ec2`. Confirm shared vars from [Setup](/setup/prerequisites/) are still in this shell (`$NAME`, `$VPC_ID`, `$PRIVATE_SUBNET_A`, `$EXEC_ROLE_ARN` is not used here — the **instance** role is separate).
+
+This page gives the EC2 path its compute. Fargate had none of this — on Fargate, AWS runs the host.
+Here you create an instance role, launch an ECS-optimized instance in a private subnet, and wait for
+it to register as capacity on the cluster.
+
+<div class="ecsx-stages not-content" aria-label="EC2 capacity stages: instance role and profile, security group, cluster, launch the instance, then it registers with the cluster.">
+  <div class="ecsx-stage">
+    <span class="ecsx-stage__n">1</span>
+    <img src={icon("icons/service/security/Arch_AWS-Identity-and-Access-Management_64.svg")} alt="" aria-hidden="true" width="28" height="28" loading="lazy" />
+    <span class="ecsx-stage__title">Instance role</span>
+    <span class="ecsx-stage__sub">role + instance profile</span>
+  </div>
+  <span class="ecsx-stage__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-stage">
+    <span class="ecsx-stage__n">2</span>
+    <img src={icon("icons/service/containers/Arch_Amazon-Elastic-Container-Service_64.svg")} alt="" aria-hidden="true" width="28" height="28" loading="lazy" />
+    <span class="ecsx-stage__title">Cluster + SG</span>
+    <span class="ecsx-stage__sub">create before boot</span>
+  </div>
+  <span class="ecsx-stage__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-stage">
+    <span class="ecsx-stage__n">3</span>
+    <img src={icon("icons/service/compute/Arch_Amazon-EC2_64.svg")} alt="" aria-hidden="true" width="28" height="28" loading="lazy" />
+    <span class="ecsx-stage__title">Launch instance</span>
+    <span class="ecsx-stage__sub">private subnet · user data</span>
+  </div>
+  <span class="ecsx-stage__arrow" aria-hidden="true">
+    →
+  </span>
+  <div class="ecsx-stage ecsx-stage--done">
+    <span class="ecsx-stage__n">4</span>
+    <span class="ecsx-stage__check" aria-hidden="true">
+      ✓
+    </span>
+    <span class="ecsx-stage__title">Registers</span>
+    <span class="ecsx-stage__sub">capacity on the cluster</span>
+  </div>
+</div>
+
+<Aside type="note">Each step shows one command with sample output directly below it. Sample outputs use the lab name `ecs-gw-lab-ec2`; ARNs and account IDs are redacted or omitted.</Aside>
+
+## Path variables
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+export PATH_NAME="${NAME}-ec2"
+export CLUSTER="$PATH_NAME"
+export GATEWAY="$PATH_NAME"
+echo "path ready: CLUSTER=$CLUSTER GATEWAY=$GATEWAY"
+```
+
+```text
+path ready: CLUSTER=ecs-gw-lab-ec2 GATEWAY=ecs-gw-lab-ec2
+```
+
+</div>
+
+## Instance role
+
+ECS container instances need an IAM role trusted by `ec2.amazonaws.com` with `AmazonEC2ContainerServiceforEC2Role`.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws iam create-role \
+  --role-name "${NAME}-ec2" \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": { "Service": "ec2.amazonaws.com" },
+      "Action": "sts:AssumeRole"
+    }]
+  }' \
+  --query 'Role.RoleName' --output text
+```
+
+```text
+ecs-gw-lab-ec2
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws iam attach-role-policy \
+  --role-name "${NAME}-ec2" \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+echo "instance role policy attached"
+```
+
+```text
+instance role policy attached
+```
+
+</div>
+
+## Instance profile
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws iam create-instance-profile --instance-profile-name "${NAME}-ec2" \
+  --query 'InstanceProfile.InstanceProfileName' --output text
+```
+
+```text
+ecs-gw-lab-ec2
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws iam add-role-to-instance-profile \
+  --instance-profile-name "${NAME}-ec2" \
+  --role-name "${NAME}-ec2"
+echo "role added to instance profile"
+```
+
+```text
+role added to instance profile
+```
+
+</div>
+
+IAM is eventually consistent — wait before `run-instances`:
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+sleep 10
+echo "ready to launch"
+```
+
+```text
+ready to launch
+```
+
+</div>
+
+## Instance security group
+
+Private-subnet instance; no inbound rules required for this lab (tasks use their own ENIs).
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+EC2_SG_ID=$(aws ec2 create-security-group \
+  --group-name "${NAME}-ec2" \
+  --description "ECS container instances for ${NAME}-ec2" \
+  --vpc-id "$VPC_ID" \
+  --query GroupId --output text)
+export EC2_SG_ID
+echo "EC2_SG_ID set (sg-<id>)"
+```
+
+```text
+EC2_SG_ID set (sg-<id>)
+```
+
+</div>
+
+## Create the cluster first
+
+The ECS agent needs the cluster name at boot (`ECS_CLUSTER` in user data).
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs create-cluster --cluster-name "$CLUSTER" \
+  --query 'cluster.{name:clusterName,status:status}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-ec2",
+    "status": "ACTIVE"
+}
+```
+
+</div>
+
+## Resolve ECS-optimized AMI
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+AMI_ID=$(aws ssm get-parameters \
+  --names /aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id \
+  --query 'Parameters[0].Value' --output text)
+export AMI_ID
+echo "AMI_ID set (ami-<id>)"
+```
+
+```text
+AMI_ID set (ami-<id>)
+```
+
+</div>
+
+## User data
+
+Pins the agent to this path’s cluster:
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+cat > /tmp/${PATH_NAME}-userdata.sh <<EOF
+#!/bin/bash
+echo ECS_CLUSTER=${CLUSTER} >> /etc/ecs/ecs.config
+EOF
+wc -l /tmp/${PATH_NAME}-userdata.sh
+```
+
+```text
+2 /tmp/ecs-gw-lab-ec2-userdata.sh
+```
+
+</div>
+
+## Launch instance
+
+Place the instance in a **private** subnet (no public IP). Outbound ECS agent and image traffic uses the NAT gateway. `t3.medium` leaves ENI headroom for `awsvpc` tasks.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+INSTANCE_ID=$(aws ec2 run-instances \
+  --image-id "$AMI_ID" \
+  --instance-type t3.medium \
+  --iam-instance-profile "Name=${NAME}-ec2" \
+  --subnet-id "$PRIVATE_SUBNET_A" \
+  --security-group-ids "$EC2_SG_ID" \
+  --no-associate-public-ip-address \
+  --user-data "file:///tmp/${PATH_NAME}-userdata.sh" \
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${PATH_NAME}}]" \
+  --query 'Instances[0].InstanceId' --output text)
+export INSTANCE_ID
+echo "INSTANCE_ID set (i-<id>)"
+```
+
+```text
+INSTANCE_ID set (i-<id>)
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+  --query 'Reservations[0].Instances[0].{state:State.Name,type:InstanceType,az:Placement.AvailabilityZone}'
+```
+
+```text
+{
+    "state": "running",
+    "type": "t3.medium",
+    "az": "ap-southeast-6a"
+}
+```
+
+</div>
+
+## Wait for registration
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+for i in $(seq 1 36); do
+  COUNT=$(aws ecs list-container-instances --cluster "$CLUSTER" \
+    --query 'length(containerInstanceArns)' --output text)
+  echo "container instances: $COUNT"
+  [ "$COUNT" != "0" ] && break
+  sleep 10
+done
+```
+
+```text
+container instances: 0
+container instances: 0
+container instances: 1
+```
+
+</div>
+
+Confirm without printing ARNs (they embed the account ID):
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs list-container-instances --cluster "$CLUSTER" \
+  --query 'length(containerInstanceArns)' --output text
+```
+
+```text
+1
+```
+
+</div>
+
+<Aside type="note">
+  If the instance never registers, check the instance profile, user data (`ECS_CLUSTER`), that the NAT gateway is `available`, and that the private route table points `0.0.0.0/0` at the NAT.
+</Aside>
+
+## Next
+
+[EC2 gateway](/ec2/gateway/)
+
+<style>{`
+  .ecsx-cli {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-block: 1rem;
+  }
+
+  .ecsx-cli > * {
+    margin-block: 0 !important;
+  }
+
+  .ecsx-stages {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0.5rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-stage {
+    position: relative;
+    flex: 1 1 9rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 1.1rem 0.9rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+  }
+
+  .ecsx-stage--done {
+    border-color: #3fb950;
+  }
+
+  .ecsx-stage__n {
+    position: absolute;
+    top: -0.7rem;
+    left: 0.9rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--sl-color-accent);
+    color: var(--sl-color-black);
+    font-size: var(--sl-text-xs);
+    font-weight: 800;
+  }
+
+  .ecsx-stage--done .ecsx-stage__n {
+    background: #3fb950;
+  }
+
+  .ecsx-stage__check {
+    font-size: 1.5rem;
+    line-height: 1;
+    color: #3fb950;
+  }
+
+  .ecsx-stage__title {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-stage__sub {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-stage__arrow {
+    align-self: center;
+    font-size: 1.4rem;
+    color: var(--sl-color-accent);
+    flex: 0 0 auto;
+  }
+
+  @media (max-width: 36rem) {
+    .ecsx-stage__arrow {
+      transform: rotate(90deg);
+    }
+  }
+`}</style>

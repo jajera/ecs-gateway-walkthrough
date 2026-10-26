@@ -1,0 +1,76 @@
+---
+title: Quotas
+description: ECS Gateway association limits, services per ALB, and maxAlbCount defaults.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The three numbers you hit in practice:
+
+<div class="ecsx-stats not-content">
+  <div class="ecsx-stat">
+    <span class="ecsx-stat__n">25</span>
+    <span class="ecsx-stat__label">services per shared ALB</span>
+  </div>
+  <div class="ecsx-stat">
+    <span class="ecsx-stat__n">10</span>
+    <span class="ecsx-stat__label">
+      default <code>maxAlbCount</code>
+    </span>
+  </div>
+  <div class="ecsx-stat ecsx-stat--calc">
+    <span class="ecsx-stat__n">250</span>
+    <span class="ecsx-stat__label">
+      services before you must raise <code>maxAlbCount</code> (25 × 10)
+    </span>
+  </div>
+</div>
+
+| Limit                           | Value  |
+| ------------------------------- | ------ |
+| Clusters associated per gateway | 10,000 |
+| Gateways associated per cluster | 5      |
+| Services per shared ALB         | 25     |
+| Default `maxAlbCount`           | 10     |
+
+If `maxAlbCount` is reached and every ALB is full, a connecting deployment fails. Raise `maxAlbCount` (via update, including the full configuration you want to keep) before you expect more than `25 × maxAlbCount` services on that gateway.
+
+<Aside type="note">Service-level ECS and ELB quotas still apply (tasks, target groups, certificates per account, and so on).</Aside>
+
+<style>{`
+  .ecsx-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: 0.6rem;
+    margin-block: 1.25rem;
+  }
+
+  .ecsx-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 1.1rem 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+  }
+
+  .ecsx-stat--calc {
+    border-color: var(--sl-color-accent);
+    background: color-mix(in srgb, var(--sl-color-accent) 8%, var(--sl-color-gray-6));
+  }
+
+  .ecsx-stat__n {
+    font-size: 2.4rem;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--sl-color-accent);
+  }
+
+  .ecsx-stat__label {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+`}</style>

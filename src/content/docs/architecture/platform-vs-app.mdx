@@ -1,0 +1,287 @@
+---
+title: Platform versus application
+description: How platform teams own the gateway and application teams opt in — compatibility, provisioning, and lifecycle.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+Two owners, one handoff: the platform stands up the gateway and decides which clusters can use it;
+application teams opt a service in. ECS does the wiring in between.
+
+## Three steps to ingress
+
+<div class="ecsx-steps not-content">
+  <div class="ecsx-step">
+    <span class="ecsx-step__n">1</span>
+    <img src={icon("icons/service/security/Arch_AWS-Identity-and-Access-Management_64.svg")} alt="Platform" width="40" height="40" loading="lazy" />
+    <span class="ecsx-step__who">Platform</span>
+    <span class="ecsx-step__what">Creates a gateway — VPC subnets, scheme, optional WAF and capacity.</span>
+  </div>
+
+<span class="ecsx-step__arrow" aria-hidden="true">
+  →
+</span>
+
+<div class="ecsx-step">
+  <span class="ecsx-step__n">2</span>
+  <img src={icon("icons/service/containers/Arch_Amazon-Elastic-Container-Service_64.svg")} alt="Platform" width="40" height="40" loading="lazy" />
+  <span class="ecsx-step__who">Platform</span>
+  <span class="ecsx-step__what">Associates the gateway with approved clusters.</span>
+</div>
+
+<span class="ecsx-step__arrow" aria-hidden="true">
+  →
+</span>
+
+  <div class="ecsx-step ecsx-step--app">
+    <span class="ecsx-step__n">3</span>
+    <img src={icon("icons/resource/containers/Res_Amazon-Elastic-Container-Service_Task_48.svg")} alt="Application" width="40" height="40" loading="lazy" />
+    <span class="ecsx-step__who">Application</span>
+    <span class="ecsx-step__what">Adds a <Tooltip term="gateway-connector" label="gateway connector" /> when creating or updating a service.</span>
+  </div>
+</div>
+
+On deploy, ECS evaluates every gateway on the cluster and connects the service to each
+**compatible** one.
+
+## Compatibility
+
+A gateway is eligible only when **all three** checks pass:
+
+| Check              | Rule                                                                                                                   |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| Access type        | Gateway scheme maps to PUBLIC or PRIVATE; connector `filters.accessTypes` must allow it (omit filter to accept either) |
+| VPC                | Gateway subnets and service subnets are in the same VPC                                                                |
+| Availability Zones | Gateway has subnets in **every** AZ the service uses                                                                   |
+
+The AZ rule is the one that trips people up — the gateway must cover **every** AZ a service runs
+in. Partial overlap is not enough.
+
+<div class="ecsx-az not-content" aria-label="Gateway public subnets and service private subnets both span the same two Availability Zones.">
+  <div class="ecsx-az__col">
+    <span class="ecsx-az__role">Gateway (public subnets)</span>
+    <span class="ecsx-az__zones">
+      <span class="ecsx-az__z">AZ-A</span>
+      <span class="ecsx-az__z">AZ-B</span>
+    </span>
+  </div>
+  <div class="ecsx-az__match" aria-hidden="true">
+    <span class="ecsx-az__check">✓</span>
+    <span>same AZ set</span>
+  </div>
+  <div class="ecsx-az__col">
+    <span class="ecsx-az__role">Service (private subnets)</span>
+    <span class="ecsx-az__zones">
+      <span class="ecsx-az__z">AZ-A</span>
+      <span class="ecsx-az__z">AZ-B</span>
+    </span>
+  </div>
+</div>
+
+<Aside type="tip">In this lab the gateway uses the two **public** subnets and services use the two **private** subnets in the **same AZs**, so AZ coverage always matches.</Aside>
+
+## What ECS provisions
+
+Once a service is compatible, ECS creates and manages the load balancer path for you — reusing
+shared pieces and adding per-route pieces.
+
+| Scope     | Resources                                                               |
+| --------- | ----------------------------------------------------------------------- |
+| Shared    | ALB, listener, ALB security group                                       |
+| Per route | ACM cert, hostname, listener rule, target group, service security group |
+
+<Aside type="caution">Every managed resource is tagged `AmazonECSManaged=true` plus the gateway and route ARNs. Don't strip those tags — ECS relies on them for updates and cleanup.</Aside>
+
+See [What a connected service creates](/concepts/what-is-ecs-gateway/#what-a-connected-service-creates)
+for the full breakdown.
+
+## Lifecycle
+
+<div class="ecsx-life not-content">
+  <div class="ecsx-life__card">
+    <span class="ecsx-life__icon" aria-hidden="true">
+      🔄
+    </span>
+    <h3>Redeploy</h3>
+    <p>Associations are re-evaluated. Newly compatible gateways attach; dropped associations remove their routes.</p>
+  </div>
+  <div class="ecsx-life__card">
+    <span class="ecsx-life__icon" aria-hidden="true">
+      🗑️
+    </span>
+    <h3>Delete service</h3>
+    <p>Its routes and per-service resources are removed. ALBs left with no services are deprovisioned.</p>
+  </div>
+  <div class="ecsx-life__card">
+    <span class="ecsx-life__icon" aria-hidden="true">
+      🚧
+    </span>
+    <h3>Delete gateway</h3>
+    <p>Needs deletion protection off and no cluster associations (ACTIVE or DISASSOCIATING). Clear services first so routes drain.</p>
+  </div>
+</div>
+
+## Next
+
+[Prerequisites](/setup/prerequisites/) then [Create VPC](/setup/vpc/).
+
+<style>{`
+  .ecsx-steps,
+  .ecsx-az,
+  .ecsx-life {
+    margin-block: 1.25rem;
+  }
+
+  /* --- Three steps --- */
+  .ecsx-steps {
+    display: flex;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .ecsx-step {
+    position: relative;
+    flex: 1 1 13rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 1.1rem 1rem 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+  }
+
+  .ecsx-step--app {
+    border-color: var(--sl-color-accent);
+    background: color-mix(in srgb, var(--sl-color-accent) 8%, var(--sl-color-gray-6));
+  }
+
+  .ecsx-step__n {
+    position: absolute;
+    top: -0.7rem;
+    left: 0.9rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--sl-color-accent);
+    color: var(--sl-color-black);
+    font-size: var(--sl-text-xs);
+    font-weight: 800;
+  }
+
+  .ecsx-step__who {
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-step__what {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  .ecsx-step__arrow {
+    align-self: center;
+    font-size: 1.5rem;
+    color: var(--sl-color-accent);
+    flex: 0 0 auto;
+  }
+
+  /* --- AZ match --- */
+  .ecsx-az {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-black);
+  }
+
+  .ecsx-az__col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .ecsx-az__role {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-az__zones {
+    display: flex;
+    gap: 0.35rem;
+  }
+
+  .ecsx-az__z {
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--sl-color-accent);
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, var(--sl-color-accent) 10%, transparent);
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-az__match {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-2);
+  }
+
+  .ecsx-az__check {
+    font-size: 1.4rem;
+    color: #3fb950;
+    line-height: 1;
+  }
+
+  /* --- Lifecycle --- */
+  .ecsx-life {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 0.75rem;
+  }
+
+  .ecsx-life__card {
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-left: 3px solid var(--sl-color-accent);
+    border-radius: 0.5rem;
+    background: var(--sl-color-gray-6);
+  }
+
+  .ecsx-life__icon {
+    font-size: 1.5rem;
+  }
+
+  .ecsx-life__card h3 {
+    margin: 0.35rem 0 0.3rem;
+    font-size: var(--sl-text-base);
+  }
+
+  .ecsx-life__card p {
+    margin: 0;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  @media (max-width: 36rem) {
+    .ecsx-step__arrow {
+      transform: rotate(90deg);
+    }
+  }
+`}</style>

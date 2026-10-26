@@ -1,0 +1,416 @@
+---
+title: EC2 services
+description: Deploy two EC2 awsvpc services with gateway connectors on the EC2-path cluster.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+
+export const icon = (name) => `https://aws-icons.johna.kiwi/${name}`;
+
+Confirm `$CLUSTER`, `$GATEWAY`, and `$PATH_NAME` are `${NAME}-ec2`, and `$EXEC_ROLE_ARN` / private subnet IDs are set. Application step: two small apps + <Tooltip term="gateway-connector" label="gateway connector" />.
+
+Stand up two different apps — **Orders** and **Catalog** — so each managed hostname clearly shows which service the gateway routed to. Same nginx image; different HTML baked into each task definition. Same connector as the Fargate path — only the launch type differs (`EC2` instead of `FARGATE`).
+
+<figure
+  class="ecsx-conn not-content"
+  aria-label="Orders service (-a) and Catalog service (-b) each attach a gateway connector on the web port. The shared gateway gives each its own managed HTTPS hostname on one ALB."
+>
+  <div class="ecsx-conn__svcs">
+    <div class="ecsx-conn__svc">
+      <img src={icon("icons/service/compute/Arch_Amazon-EC2_64.svg")} alt="" aria-hidden="true" width="26" height="26" loading="lazy" />
+      <span class="ecsx-conn__name">Orders</span>
+      <span class="ecsx-conn__meta">
+        service <code>-a</code> · port <code>web</code>
+      </span>
+    </div>
+    <div class="ecsx-conn__svc">
+      <img src={icon("icons/service/compute/Arch_Amazon-EC2_64.svg")} alt="" aria-hidden="true" width="26" height="26" loading="lazy" />
+      <span class="ecsx-conn__name">Catalog</span>
+      <span class="ecsx-conn__meta">
+        service <code>-b</code> · port <code>web</code>
+      </span>
+    </div>
+  </div>
+  <span class="ecsx-conn__join" aria-hidden="true">
+    + connector →
+  </span>
+  <div class="ecsx-conn__gw">
+    <img src={icon("icons/resource/networking/Res_Elastic-Load-Balancing_Application-Load-Balancer_48.svg")} alt="" aria-hidden="true" width="30" height="30" loading="lazy" />
+    <span class="ecsx-conn__name">One gateway · one shared ALB</span>
+    <span class="ecsx-conn__meta">host-based routing · HTTPS 443</span>
+  </div>
+  <span class="ecsx-conn__join" aria-hidden="true">
+    → own hostname each
+  </span>
+  <div class="ecsx-conn__urls">
+    <code>&lt;id-a&gt;.ecs.&lt;region&gt;.on.aws</code>
+    <code>&lt;id-b&gt;.ecs.&lt;region&gt;.on.aws</code>
+  </div>
+</figure>
+
+<Aside type="note">Each step shows one command with sample output directly below it. Sample outputs use the lab name `ecs-gw-lab-ec2`; ARNs and account IDs are redacted or omitted.</Aside>
+
+## Confirm path
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+echo "CLUSTER=$CLUSTER GATEWAY=$GATEWAY PATH_NAME=$PATH_NAME"
+```
+
+```text
+CLUSTER=ecs-gw-lab-ec2 GATEWAY=ecs-gw-lab-ec2 PATH_NAME=ecs-gw-lab-ec2
+```
+
+</div>
+
+## Log group
+
+`AmazonECSTaskExecutionRolePolicy` can write log **streams**, but not create the **group**. Create the group with your caller identity (do not use `awslogs-create-group` — that needs `logs:CreateLogGroup` on the exec role).
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws logs create-log-group --log-group-name "/ecs/${PATH_NAME}" 2>/dev/null || true
+```
+
+```text
+(no stdout — created, or already exists)
+```
+
+</div>
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws logs put-retention-policy --log-group-name "/ecs/${PATH_NAME}" --retention-in-days 7
+```
+
+```text
+(no stdout — success is silent)
+```
+
+</div>
+
+## Task definitions
+
+`awsvpc` + named port `web` (must match the connector `portName`). HTML is base64-encoded so the task JSON stays tidy.
+
+<Aside type="note">
+  Baking the page HTML into the task definition is a **demo shortcut**. Real apps bake content into the image (or serve from elsewhere). Here it only makes Orders and Catalog look different.
+</Aside>
+
+Define helpers once in this shell (no AWS call yet):
+
+```bash frame="terminal"
+write_app_html() {
+  local out="$1" title="$2" accent="$3" blurb="$4"
+  cat > "$out" <<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title} · ECS Gateway lab</title>
+  <style>
+    :root { color-scheme: light dark; --accent: ${accent}; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, color-mix(in oklab, var(--accent) 28%, transparent), transparent 60%),
+        radial-gradient(900px 500px at 100% 0%, color-mix(in oklab, var(--accent) 16%, transparent), transparent 55%),
+        #0f1419;
+      color: #e8eef5;
+    }
+    main {
+      width: min(36rem, calc(100% - 2rem));
+      padding: 2rem 2.1rem 1.75rem;
+      border: 1px solid color-mix(in oklab, var(--accent) 45%, #2a3542);
+      border-radius: 1rem;
+      background: color-mix(in oklab, #15202b 88%, var(--accent));
+      box-shadow: 0 24px 60px rgba(0,0,0,.35);
+    }
+    .eyebrow {
+      margin: 0 0 .65rem; font-size: .75rem; letter-spacing: .14em;
+      text-transform: uppercase; color: color-mix(in oklab, #c9d6e5 70%, var(--accent));
+    }
+    h1 { margin: 0 0 .75rem; font-size: clamp(1.8rem, 4vw, 2.4rem); letter-spacing: -0.03em; }
+    p { margin: 0 0 .9rem; line-height: 1.55; color: #c5d0dc; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .9em; color: #fff;
+      background: rgba(0,0,0,.28); padding: .12em .4em; border-radius: .35em;
+    }
+    .meta { margin-top: 1.25rem; font-size: .85rem; color: #9aabbc; }
+  </style>
+</head>
+<body>
+  <main data-app="${title}">
+    <p class="eyebrow">ECS Gateway lab · host-shared ALB</p>
+    <h1>${title}</h1>
+    <p>${blurb}</p>
+    <p class="meta">If you open the other app’s URL, you should get a different page on the <strong>same</strong> load balancer.</p>
+  </main>
+</body>
+</html>
+HTML
+}
+
+register_web_task() {
+  local family="$1" html_file="$2"
+  local b64
+  b64=$(base64 -w0 < "$html_file")
+  cat > /tmp/${family}-task.json <<EOF
+{
+  "family": "${family}",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["EC2"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "${EXEC_ROLE_ARN}",
+  "containerDefinitions": [{
+    "name": "web",
+    "image": "public.ecr.aws/nginx/nginx:stable-alpine",
+    "essential": true,
+    "entryPoint": ["sh", "-c"],
+    "command": ["echo '${b64}' | base64 -d > /usr/share/nginx/html/index.html && exec nginx -g 'daemon off;'"],
+    "portMappings": [{
+      "name": "web",
+      "containerPort": 80,
+      "protocol": "tcp",
+      "appProtocol": "http"
+    }],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/${PATH_NAME}",
+        "awslogs-region": "${AWS_REGION}",
+        "awslogs-stream-prefix": "web"
+      }
+    }
+  }]
+}
+EOF
+  aws ecs register-task-definition \
+    --cli-input-json "file:///tmp/${family}-task.json" \
+    --query 'taskDefinition.{family:family,revision:revision}'
+}
+```
+
+Write the two pages (local files only):
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+write_app_html /tmp/${PATH_NAME}-orders.html "Orders" "#3d8bfd" \
+  "Checkout and order history for the shop. This page is served by <code>${PATH_NAME}-a</code> behind the EC2-path gateway."
+write_app_html /tmp/${PATH_NAME}-catalog.html "Catalog" "#3ecf8e" \
+  "Product listing and search. This page is served by <code>${PATH_NAME}-b</code> on a different hostname — same ALB, different route."
+ls /tmp/${PATH_NAME}-orders.html /tmp/${PATH_NAME}-catalog.html
+```
+
+```text
+/tmp/ecs-gw-lab-ec2-orders.html
+/tmp/ecs-gw-lab-ec2-catalog.html
+```
+
+</div>
+
+Register Orders:
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+register_web_task "${PATH_NAME}-a" /tmp/${PATH_NAME}-orders.html
+```
+
+```text
+{
+    "family": "ecs-gw-lab-ec2-a",
+    "revision": 1
+}
+```
+
+</div>
+
+Register Catalog:
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+register_web_task "${PATH_NAME}-b" /tmp/${PATH_NAME}-catalog.html
+```
+
+```text
+{
+    "family": "ecs-gw-lab-ec2-b",
+    "revision": 1
+}
+```
+
+</div>
+
+## Service A (Orders)
+
+Tasks run in **private** subnets with `assignPublicIp=DISABLED` on the EC2 capacity from [capacity](/ec2/capacity/). First connector attachment provisions the shared ALB in the **public** subnets for this gateway.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs create-service \
+  --cluster "$CLUSTER" \
+  --service-name "${PATH_NAME}-a" \
+  --task-definition "${PATH_NAME}-a" \
+  --desired-count 1 \
+  --launch-type EC2 \
+  --network-configuration "awsvpcConfiguration={
+    subnets=[${PRIVATE_SUBNET_A},${PRIVATE_SUBNET_B}],
+    assignPublicIp=DISABLED
+  }" \
+  --gateway-connectors '[{
+    "portName": "web",
+    "filters": { "accessTypes": ["PUBLIC"] },
+    "healthCheck": { "healthCheckPath": "/" }
+  }]' \
+  --query 'service.{name:serviceName,status:status,desired:desiredCount}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-ec2-a",
+    "status": "ACTIVE",
+    "desired": 1
+}
+```
+
+</div>
+
+## Service B (Catalog)
+
+Same connector shape — platform already defined ingress on the EC2-path gateway.
+
+<div class="ecsx-cli">
+
+```bash frame="terminal"
+aws ecs create-service \
+  --cluster "$CLUSTER" \
+  --service-name "${PATH_NAME}-b" \
+  --task-definition "${PATH_NAME}-b" \
+  --desired-count 1 \
+  --launch-type EC2 \
+  --network-configuration "awsvpcConfiguration={
+    subnets=[${PRIVATE_SUBNET_A},${PRIVATE_SUBNET_B}],
+    assignPublicIp=DISABLED
+  }" \
+  --gateway-connectors '[{
+    "portName": "web",
+    "filters": { "accessTypes": ["PUBLIC"] },
+    "healthCheck": { "healthCheckPath": "/" }
+  }]' \
+  --query 'service.{name:serviceName,status:status,desired:desiredCount}'
+```
+
+```text
+{
+    "name": "ecs-gw-lab-ec2-b",
+    "status": "ACTIVE",
+    "desired": 1
+}
+```
+
+</div>
+
+<Aside type="tip">Both apps share one gateway and (once provisioned) one host-shared ALB. On [verify](/ec2/verify/), Orders and Catalog should each render on their own hostname.</Aside>
+
+## Next
+
+[EC2 verify](/ec2/verify/)
+
+<style>{`
+  .ecsx-cli {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-block: 1rem;
+  }
+
+  .ecsx-cli > * {
+    margin-block: 0 !important;
+  }
+
+  .ecsx-conn {
+    margin-block: 1.5rem;
+    padding: 1.25rem 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-black);
+  }
+
+  .ecsx-conn__svcs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: 0.5rem;
+    width: 100%;
+    max-width: 30rem;
+  }
+
+  .ecsx-conn__svc,
+  .ecsx-conn__gw {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.55rem;
+    background: var(--sl-color-gray-6);
+    text-align: center;
+  }
+
+  .ecsx-conn__gw {
+    border-color: var(--sl-color-accent);
+    background: color-mix(in srgb, var(--sl-color-accent) 8%, var(--sl-color-gray-6));
+    width: 100%;
+    max-width: 24rem;
+  }
+
+  .ecsx-conn__name {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .ecsx-conn__meta {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  .ecsx-conn__join {
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--sl-color-accent);
+  }
+
+  .ecsx-conn__urls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.4rem;
+  }
+
+  .ecsx-conn__urls code {
+    font-size: var(--sl-text-xs);
+    padding: 0.25rem 0.5rem;
+    border: 1px dashed var(--sl-color-gray-4);
+    border-radius: 0.35rem;
+    background: var(--sl-color-gray-6);
+  }
+`}</style>
